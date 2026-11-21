@@ -1,0 +1,329 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile and cloud library summary stored at /users/{userId}.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name from Google Sign-In."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Optional email address of the signed-in user (strictly owner-only access)."
+        },
+        "photoUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "Optional avatar URL from Google Sign-In."
+        },
+        "totalBooksSynced": {
+          "type": "integer",
+          "description": "Count of books synced to the user's cloud library."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() upon profile creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on every update."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "totalBooksSynced",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudBookRecord": {
+      "title": "CloudBookRecord",
+      "description": "Synced EPUB book metadata and reading progress belonging to a specific user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning user."
+        },
+        "title": {
+          "type": "string",
+          "description": "Book title."
+        },
+        "author": {
+          "type": "string",
+          "description": "Book author name."
+        },
+        "originalFileName": {
+          "type": "string",
+          "description": "Original PDF or EPUB source filename."
+        },
+        "fileSizeBytes": {
+          "type": "integer",
+          "description": "File size in bytes."
+        },
+        "pageCount": {
+          "type": "integer",
+          "description": "Total page count."
+        },
+        "chapterCount": {
+          "type": "integer",
+          "description": "Total chapter count."
+        },
+        "lastReadChapterIndex": {
+          "type": "integer",
+          "description": "Zero-based index of the last read chapter."
+        },
+        "favorite": {
+          "type": "boolean",
+          "description": "Whether the book is starred as a favorite."
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Whether the book has been marked as completed."
+        },
+        "convertedAtMillis": {
+          "type": "integer",
+          "description": "Epoch timestamp in milliseconds when the book was converted or imported."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on every update."
+        }
+      },
+      "required": [
+        "userId",
+        "title",
+        "author",
+        "originalFileName",
+        "fileSizeBytes",
+        "pageCount",
+        "chapterCount",
+        "lastReadChapterIndex",
+        "favorite",
+        "completed",
+        "convertedAtMillis",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudReadingSession": {
+      "title": "CloudReadingSession",
+      "description": "Immutable reading session record synced to the user's analytics log.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning user."
+        },
+        "bookKey": {
+          "type": "string",
+          "description": "Stable cloud document key of the associated book."
+        },
+        "bookTitle": {
+          "type": "string",
+          "description": "Title of the book read during this session."
+        },
+        "durationSeconds": {
+          "type": "integer",
+          "description": "Reading duration in seconds."
+        },
+        "pagesRead": {
+          "type": "integer",
+          "description": "Number of pages read during this session."
+        },
+        "startPage": {
+          "type": "integer",
+          "description": "Starting page index."
+        },
+        "endPage": {
+          "type": "integer",
+          "description": "Ending page index."
+        },
+        "timestampMillis": {
+          "type": "integer",
+          "description": "Session epoch timestamp in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation."
+        }
+      },
+      "required": [
+        "userId",
+        "bookKey",
+        "bookTitle",
+        "durationSeconds",
+        "pagesRead",
+        "startPage",
+        "endPage",
+        "timestampMillis",
+        "createdAt"
+      ]
+    },
+    "CloudHighlight": {
+      "title": "CloudHighlight",
+      "description": "Synced book highlight and optional reader note.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning user."
+        },
+        "bookKey": {
+          "type": "string",
+          "description": "Stable cloud document key of the associated book."
+        },
+        "bookTitle": {
+          "type": "string",
+          "description": "Title of the book."
+        },
+        "chapterIndex": {
+          "type": "integer",
+          "description": "Zero-based chapter index."
+        },
+        "chapterTitle": {
+          "type": "string",
+          "description": "Title of the chapter."
+        },
+        "paragraphIndex": {
+          "type": "integer",
+          "description": "Zero-based paragraph index."
+        },
+        "text": {
+          "type": "string",
+          "description": "Highlighted text excerpt."
+        },
+        "colorHex": {
+          "type": "integer",
+          "description": "ARGB highlight color integer."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional user note attached to the highlight."
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["WORD", "LINE", "PASSAGE", "CUSTOM"],
+          "description": "Selection scope of the highlight."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation."
+        }
+      },
+      "required": [
+        "userId",
+        "bookKey",
+        "bookTitle",
+        "chapterIndex",
+        "chapterTitle",
+        "paragraphIndex",
+        "text",
+        "colorHex",
+        "note",
+        "scope",
+        "createdAt"
+      ]
+    },
+    "CloudBookmark": {
+      "title": "CloudBookmark",
+      "description": "Synced reader bookmark.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning user."
+        },
+        "bookKey": {
+          "type": "string",
+          "description": "Stable cloud document key of the associated book."
+        },
+        "bookTitle": {
+          "type": "string",
+          "description": "Title of the book."
+        },
+        "chapterIndex": {
+          "type": "integer",
+          "description": "Zero-based chapter index."
+        },
+        "chapterTitle": {
+          "type": "string",
+          "description": "Title of the chapter."
+        },
+        "pageNumber": {
+          "type": "integer",
+          "description": "Bookmarked page number."
+        },
+        "totalBookPages": {
+          "type": "integer",
+          "description": "Total pages in the book."
+        },
+        "scrollOffsetFraction": {
+          "type": "number",
+          "description": "Relative scroll position between 0 and 1."
+        },
+        "snippet": {
+          "type": "string",
+          "description": "Text snippet around the bookmarked position."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation."
+        }
+      },
+      "required": [
+        "userId",
+        "bookKey",
+        "bookTitle",
+        "chapterIndex",
+        "chapterTitle",
+        "pageNumber",
+        "totalBookPages",
+        "scrollOffsetFraction",
+        "snippet",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only user profile document storing Google account metadata and synced library count."
+    },
+    "/users/{userId}/books/{bookId}": {
+      "schema": { "$ref": "#/entities/CloudBookRecord" },
+      "description": "User-scoped collection of synced EPUB book metadata and reading progress."
+    },
+    "/users/{userId}/reading_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/CloudReadingSession" },
+      "description": "User-scoped collection of reading analytics sessions."
+    },
+    "/users/{userId}/highlights/{highlightId}": {
+      "schema": { "$ref": "#/entities/CloudHighlight" },
+      "description": "User-scoped collection of book highlights and reader notes."
+    },
+    "/users/{userId}/bookmarks/{bookmarkId}": {
+      "schema": { "$ref": "#/entities/CloudBookmark" },
+      "description": "User-scoped collection of saved reader bookmarks."
+    }
+  }
+}

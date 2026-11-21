@@ -1,0 +1,225 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny all access by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPER PRIMITIVES ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- ENTITY VALIDATION BLUEPRINTS ---
+    function isValidUserProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 254)) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+             data.totalBooksSynced is int && data.totalBooksSynced >= 0 && data.totalBooksSynced <= 100000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCloudBook(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
+             data.author is string && data.author.size() >= 1 && data.author.size() <= 200 &&
+             data.originalFileName is string && data.originalFileName.size() >= 1 && data.originalFileName.size() <= 300 &&
+             data.fileSizeBytes is int && data.fileSizeBytes >= 0 && data.fileSizeBytes <= 2147483648 &&
+             data.pageCount is int && data.pageCount >= 0 && data.pageCount <= 100000 &&
+             data.chapterCount is int && data.chapterCount >= 0 && data.chapterCount <= 10000 &&
+             data.lastReadChapterIndex is int && data.lastReadChapterIndex >= 0 && data.lastReadChapterIndex <= 10000 &&
+             data.favorite is bool &&
+             data.completed is bool &&
+             data.convertedAtMillis is int && data.convertedAtMillis >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidReadingSession(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.bookKey is string && data.bookKey.size() >= 1 && data.bookKey.size() <= 128 &&
+             data.bookTitle is string && data.bookTitle.size() <= 300 &&
+             data.durationSeconds is int && data.durationSeconds >= 0 && data.durationSeconds <= 86400 &&
+             data.pagesRead is int && data.pagesRead >= 0 && data.pagesRead <= 10000 &&
+             data.startPage is int && data.startPage >= 0 && data.startPage <= 100000 &&
+             data.endPage is int && data.endPage >= 0 && data.endPage <= 100000 &&
+             data.timestampMillis is int && data.timestampMillis >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidHighlight(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.bookKey is string && data.bookKey.size() >= 1 && data.bookKey.size() <= 128 &&
+             data.bookTitle is string && data.bookTitle.size() <= 300 &&
+             data.chapterIndex is int && data.chapterIndex >= 0 && data.chapterIndex <= 10000 &&
+             data.chapterTitle is string && data.chapterTitle.size() <= 300 &&
+             data.paragraphIndex is int && data.paragraphIndex >= 0 && data.paragraphIndex <= 100000 &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 5000 &&
+             data.colorHex is int &&
+             data.note is string && data.note.size() <= 2000 &&
+             data.scope is string && data.scope in ['WORD', 'LINE', 'PASSAGE', 'CUSTOM'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidBookmark(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.bookKey is string && data.bookKey.size() >= 1 && data.bookKey.size() <= 128 &&
+             data.bookTitle is string && data.bookTitle.size() <= 300 &&
+             data.chapterIndex is int && data.chapterIndex >= 0 && data.chapterIndex <= 10000 &&
+             data.chapterTitle is string && data.chapterTitle.size() <= 300 &&
+             data.pageNumber is int && data.pageNumber >= 0 && data.pageNumber <= 100000 &&
+             data.totalBookPages is int && data.totalBookPages >= 0 && data.totalBookPages <= 100000 &&
+             data.scrollOffsetFraction is number && data.scrollOffsetFraction >= 0 && data.scrollOffsetFraction <= 1 &&
+             data.snippet is string && data.snippet.size() <= 500 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // --- USER PROFILE & PRIVATE SUBCOLLECTIONS ---
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'totalBooksSynced', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'photoUrl', 'totalBooksSynced', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoUrl', 'totalBooksSynced', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /books/{bookId} {
+        allow get: if isOwner(userId) && isValidId(bookId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(bookId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'title', 'author', 'originalFileName',
+                           'fileSizeBytes', 'pageCount', 'chapterCount',
+                           'lastReadChapterIndex', 'favorite', 'completed',
+                           'convertedAtMillis', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'title', 'author', 'originalFileName',
+                           'fileSizeBytes', 'pageCount', 'chapterCount',
+                           'lastReadChapterIndex', 'favorite', 'completed',
+                           'convertedAtMillis', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCloudBook(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(bookId) &&
+                         isValidCloudBook(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         (
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'title', 'author', 'originalFileName', 'fileSizeBytes',
+                             'pageCount', 'chapterCount', 'lastReadChapterIndex',
+                             'favorite', 'completed', 'convertedAtMillis', 'updatedAt'
+                           ])
+                         );
+
+        allow delete: if isOwner(userId) && isValidId(bookId);
+      }
+
+      match /reading_sessions/{sessionId} {
+        allow get: if isOwner(userId) && isValidId(sessionId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(sessionId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'bookKey', 'bookTitle', 'durationSeconds',
+                           'pagesRead', 'startPage', 'endPage', 'timestampMillis', 'createdAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'bookKey', 'bookTitle', 'durationSeconds',
+                           'pagesRead', 'startPage', 'endPage', 'timestampMillis', 'createdAt'
+                         ]) &&
+                         isValidReadingSession(incoming(), userId);
+
+        allow update: if false;
+        allow delete: if isOwner(userId) && isValidId(sessionId);
+      }
+
+      match /highlights/{highlightId} {
+        allow get: if isOwner(userId) && isValidId(highlightId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(highlightId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'bookKey', 'bookTitle', 'chapterIndex',
+                           'chapterTitle', 'paragraphIndex', 'text', 'colorHex',
+                           'note', 'scope', 'createdAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'bookKey', 'bookTitle', 'chapterIndex',
+                           'chapterTitle', 'paragraphIndex', 'text', 'colorHex',
+                           'note', 'scope', 'createdAt'
+                         ]) &&
+                         isValidHighlight(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(highlightId) &&
+                         isValidHighlight(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['note', 'colorHex']);
+
+        allow delete: if isOwner(userId) && isValidId(highlightId);
+      }
+
+      match /bookmarks/{bookmarkId} {
+        allow get: if isOwner(userId) && isValidId(bookmarkId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(bookmarkId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'bookKey', 'bookTitle', 'chapterIndex',
+                           'chapterTitle', 'pageNumber', 'totalBookPages',
+                           'scrollOffsetFraction', 'snippet', 'createdAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'bookKey', 'bookTitle', 'chapterIndex',
+                           'chapterTitle', 'pageNumber', 'totalBookPages',
+                           'scrollOffsetFraction', 'snippet', 'createdAt'
+                         ]) &&
+                         isValidBookmark(incoming(), userId);
+
+        allow update: if false;
+        allow delete: if isOwner(userId) && isValidId(bookmarkId);
+      }
+    }
+  }
+}

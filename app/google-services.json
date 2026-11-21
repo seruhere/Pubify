@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "579392870384",
+    "project_id": "gen-lang-client-0526754594",
+    "storage_bucket": "gen-lang-client-0526754594.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:579392870384:android:bb1ed9dc6fc91d9d2bef35",
+        "android_client_info": {
+          "package_name": "com.aistudio.pdftoepub.novrzt"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "579392870384-17aot7dvn26k74buv3hpra8hq7aquiu0.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.pdftoepub.novrzt",
+            "certificate_hash": "9132e9b8c2933a936768a881fcd610a676e2c1a9"
+          }
+        },
+        {
+          "client_id": "579392870384-3uljm8ckfkgppuoqtou778pdrd88dbtk.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBqgCR0OuR6e89yAs7AnFwGRvljr9prZEE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "579392870384-3uljm8ckfkgppuoqtou778pdrd88dbtk.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
