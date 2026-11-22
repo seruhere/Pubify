@@ -1,22 +1,72 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Pubify - PDF to EPUB Converter & Smart Reader
 
-# Run and deploy your AI Studio app
+**Pubify** is a feature-rich, modern Android application built with Jetpack Compose that allows users to convert PDF documents into clean, reflowable EPUB e-books with smart chapter detection, custom metadata, and a built-in reading environment enriched by AI insights and Text-to-Speech capabilities.
 
-This contains everything you need to run your app locally.
+---
 
-View your app in AI Studio: https://ai.studio/apps/b5225247-0949-492f-8bee-cec45a0fe376
+a## 🌟 Key Features
 
-## Run Locally
+- **⚡ Unlimited PDF to EPUB Conversion**
+  - **Structure & Metadata Extraction**: Automatically parses PDF structure, font hierarchy, table of contents, and cover images.
+  - **Smart Chapter Detection**: Automatically detects chapter headings and splits content into clean EPUB chapters.
+  - **Metadata Customization**: Edit book title, author, description, cover image, and chapter boundaries before building the EPUB file.
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+- **📖 Advanced EPUB Reader**
+  - **Reflowable Layout & Customization**: Adjust font size, line spacing, margins, and typography (supports custom fonts like *EB Garamond*, *Literata*, *Lora*, and *Inter*).
+  - **Custom Themes**: Includes Light, Dark, Sepia, and Glassmorphic reader themes.
+  - **Bookmarks & Highlights**: Save reading progress, highlight important text, and add notes.
 
+- **🤖 AI-Powered Assistant (Gemini)**
+  - **In-Book Dictionary & Explanations**: Select words or paragraphs to fetch instant AI definitions, contextual summaries, or translations using Gemini.
+  - **AI Reader Tools**: Quick insights and summaries directly inside the reading view.
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
-7. If you have already published your app in AI Studio, please [request upload key reset](https://support.google.com/googleplay/android-developer/answer/9842756#zippy=%2Crequest-an-upload-key-reset) in Google Play Console.
+- **🎙️ Text-to-Speech (TTS)**
+  - Integrated hands-free audio playback with speech rate control, pitch adjustments, sentence highlighting, and media controls.
+
+- **📊 Reading Statistics & Library Management**
+  - **Local Room Database**: Organizes your collection of books, bookmarks, highlights, and reading stats offline.
+  - **Analytics**: Track total reading time, daily reading streaks, pages read, and reading speed.
+
+- **☁️ Cloud Sync & Security**
+  - **Firebase Authentication & Firestore**: Sync your library, reading progress, and bookmarks across devices via Google Sign-In.
+  - **Firebase App Check**: Protects API resources against unauthorized requests.
+
+---
+
+## 🛠️ Tech Stack & Architecture
+
+- **Language & UI Framework**: [Kotlin](https://kotlinlang.org/) & [Jetpack Compose](https://developer.android.com/jetpack/compose) (Material 3)
+- **Architecture**: MVVM (Model-View-ViewModel) + Clean Architecture principles
+- **PDF & EPUB Engine**: [PDFBox-Android](https://github.com/TomRoushed/pdfbox-android), Custom EPUB XML generator & ZIP unpacker/parser
+- **Local Database**: [Room Database](https://developer.android.com/training/data-storage/room) with KSP
+- **Asynchronous & Reactive**: Kotlin Coroutines & `StateFlow` / `SharedFlow`
+- **Cloud & AI Integration**: Firebase SDK (Auth, Firestore, App Check), Google Gemini API
+- **Networking**: Retrofit 2, Moshi, OkHttp 4
+- **Image Loading**: Coil
+- **Testing**: JUnit 4, Robolectric, Roborazzi (Screenshot Testing)
+
+---
+
+## 📁 Project Structure
+
+```
+Pubify/
+├── app/
+│   ├── src/main/java/com/example/
+│   │   ├── converter/            # PDF extraction & EPUB generation engines
+│   │   ├── data/                 # Room database, Entities, DAOs, Firebase repositories
+│   │   ├── reader/               # EPUB parser, pagination engine, TTS manager, Gemini AI helpers
+│   │   └── ui/                   # Jetpack Compose UI screens, components, and design system
+│   │       ├── components/       # Reusable UI components & custom text renderers
+│   │       ├── screens/          # Converter, Reader, Library, Tools, Auth, Stats screens
+│   │       ├── theme/            # Material 3 colors, typography, shapes, and themes
+│   │       └── viewmodel/        # ViewModels managing state & business logic
+├── gradle/                       # Dependency catalog (libs.versions.toml) & wrapper
+└── build.gradle.kts              # Root build configuration
+```
+
+---
+
+## 📜 License
+
+This project is released under the [MIT License](LICENSE).

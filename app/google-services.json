@@ -1,41 +1,78 @@
 {
   "project_info": {
-    "project_number": "579392870384",
-    "project_id": "gen-lang-client-0526754594",
-    "storage_bucket": "gen-lang-client-0526754594.firebasestorage.app"
+    "project_number": "914190477633",
+    "project_id": "pubify111",
+    "storage_bucket": "pubify111.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:579392870384:android:bb1ed9dc6fc91d9d2bef35",
+        "mobilesdk_app_id": "1:914190477633:android:5f7bbf20de1e6f56df99c0",
         "android_client_info": {
-          "package_name": "com.aistudio.pdftoepub.novrzt"
+          "package_name": "com.serma.Pubify"
         }
       },
       "oauth_client": [
         {
-          "client_id": "579392870384-17aot7dvn26k74buv3hpra8hq7aquiu0.apps.googleusercontent.com",
+          "client_id": "914190477633-2drljb2ri66o87564elk10bor3ssmj1g.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.aistudio.pdftoepub.novrzt",
-            "certificate_hash": "9132e9b8c2933a936768a881fcd610a676e2c1a9"
+            "package_name": "com.serma.Pubify",
+            "certificate_hash": "6f971e4e8f930c79d72759160b572eab6d31f7ff"
           }
         },
         {
-          "client_id": "579392870384-3uljm8ckfkgppuoqtou778pdrd88dbtk.apps.googleusercontent.com",
+          "client_id": "914190477633-janqm8s633o4029mrgf8o44dmqm7s4ul.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyBqgCR0OuR6e89yAs7AnFwGRvljr9prZEE"
+          "current_key": "AIzaSyA5s_i28M3UQ8wgolGnegCb5UhpKOzckbA"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "579392870384-3uljm8ckfkgppuoqtou778pdrd88dbtk.apps.googleusercontent.com",
+              "client_id": "914190477633-janqm8s633o4029mrgf8o44dmqm7s4ul.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:914190477633:android:5f7bbf20de1e6f56df99c0",
+        "android_client_info": {
+          "package_name": "com.serma.pubify"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "914190477633-2drljb2ri66o87564elk10bor3ssmj1g.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.serma.pubify",
+            "certificate_hash": "6f971e4e8f930c79d72759160b572eab6d31f7ff"
+          }
+        },
+        {
+          "client_id": "914190477633-janqm8s633o4029mrgf8o44dmqm7s4ul.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA5s_i28M3UQ8wgolGnegCb5UhpKOzckbA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "914190477633-janqm8s633o4029mrgf8o44dmqm7s4ul.apps.googleusercontent.com",
               "client_type": 3
             }
           ]
