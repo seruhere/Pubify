@@ -210,6 +210,7 @@ fun ToolsScreen(
                         bookmarks = allBookmarks
                     )
                 },
+                onSwitchToOffline = { viewModel.setGuestMode(true) },
                 gold = gold,
                 blue = blue,
                 isDark = isDark
@@ -809,6 +810,7 @@ private fun CloudAccountSyncCard(
     cloudSyncViewModel: CloudSyncViewModel,
     currentUser: FirebaseUser,
     onSyncNow: () -> Unit,
+    onSwitchToOffline: () -> Unit,
     gold: Color,
     blue: Color,
     isDark: Boolean
@@ -1045,7 +1047,10 @@ private fun CloudAccountSyncCard(
                 }
 
                 OutlinedButton(
-                    onClick = { signOutFromFirebase(credentialManager, scope) },
+                    onClick = {
+                        onSwitchToOffline()
+                        signOutFromFirebase(credentialManager, scope)
+                    },
                     shape = RoundedCornerShape(100.dp),
                     border = BorderStroke(1.1.dp, blue.copy(alpha = 0.65f)),
                     modifier = Modifier
@@ -1206,41 +1211,63 @@ private fun GuestCloudSignInCard(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    gold.copy(alpha = if (isDark) 0.22f else 0.16f),
-                                    blue.copy(alpha = if (isDark) 0.22f else 0.14f)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        gold.copy(alpha = if (isDark) 0.22f else 0.16f),
+                                        blue.copy(alpha = if (isDark) 0.22f else 0.14f)
+                                    )
                                 )
                             )
+                            .border(1.dp, luxuryGoldBlueBorderBrush(0.75f), RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudSync,
+                            contentDescription = null,
+                            tint = gold,
+                            modifier = Modifier.size(20.dp)
                         )
-                        .border(1.dp, luxuryGoldBlueBorderBrush(0.75f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CloudSync,
-                        contentDescription = null,
-                        tint = gold,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    }
+                    Column {
+                        Text(
+                            text = stringResource(id = R.string.settings_cloud_sign_in_title),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = gold
+                        )
+                        Text(
+                            text = stringResource(id = R.string.settings_cloud_sign_in_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-                Column {
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(100.dp),
+                    color = gold.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, gold.copy(alpha = 0.45f))
+                ) {
                     Text(
-                        text = stringResource(id = R.string.settings_cloud_sign_in_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = gold
-                    )
-                    Text(
-                        text = stringResource(id = R.string.settings_cloud_sign_in_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "Offline",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = gold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
             }

@@ -54,8 +54,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -67,7 +67,7 @@ import com.serma.pubify.reader.TtsState
 /**
  * High-craft dockable audio controller for Text-to-Speech playback in EPUB Reader.
  * Provides controls for play/pause, paragraph skipping, speed adjustment,
- * and live sentence preview with pulsing audio animation.
+ * and live sentence preview with GPU-composited pulsing audio animation.
  */
 @Composable
 fun TtsReaderControlsBar(
@@ -89,13 +89,13 @@ fun TtsReaderControlsBar(
         readerTheme.backgroundColor
     }
 
-    // Audio wave pulsing effect when speaking
+    // Audio wave pulsing effect read strictly inside graphicsLayer (zero recompositions)
     val infiniteTransition = rememberInfiniteTransition(label = "tts_pulse")
-    val pulseScale by infiniteTransition.animateFloat(
+    val pulseScaleState = infiniteTransition.animateFloat(
         initialValue = 1.0f,
-        targetValue = 1.25f,
+        targetValue = 1.22f,
         animationSpec = infiniteRepeatable(
-            animation = tween(600, easing = FastOutSlowInEasing),
+            animation = tween(650, easing = IosMotion.EaseOut),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulse_scale"
@@ -139,9 +139,11 @@ fun TtsReaderControlsBar(
                             tint = accentColor,
                             modifier = Modifier
                                 .size(18.dp)
-                                .then(
-                                    if (ttsState.isPlaying) Modifier.scale(pulseScale) else Modifier
-                                )
+                                .graphicsLayer {
+                                    val s = if (ttsState.isPlaying) pulseScaleState.value else 1f
+                                    scaleX = s
+                                    scaleY = s
+                                }
                         )
                     }
 

@@ -3,11 +3,10 @@ package com.serma.pubify.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -17,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -61,10 +61,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -163,7 +167,7 @@ fun StudioBrandHeader(
 }
 
 /**
- * Floating glassmorphic segmented pill switcher for Single File vs Batch Queue modes.
+ * Floating glassmorphic segmented pill switcher with an iOS-style GPU sliding thumb.
  */
 @Composable
 fun GlassSegmentedModePill(
@@ -175,8 +179,13 @@ fun GlassSegmentedModePill(
 ) {
     val palette = LocalGlassPalette.current
     val outerShape = RoundedCornerShape(100.dp)
+    val thumbProgress = animateFloatAsState(
+        targetValue = if (isMultiSelectMode) 1f else 0f,
+        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.80f, stiffness = 420f),
+        label = "segment_sliding_thumb"
+    )
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .height(52.dp)
@@ -184,9 +193,23 @@ fun GlassSegmentedModePill(
             .padding(4.dp)
             .testTag("converter_mode_selector")
     ) {
+        val halfWidth = maxWidth / 2f
+
+        // Sliding frosted pill thumb rendered purely via GPU translationX
+        Box(
+            modifier = Modifier
+                .width(halfWidth)
+                .fillMaxHeight()
+                .graphicsLayer {
+                    translationX = thumbProgress.value * halfWidth.toPx()
+                }
+                .clip(outerShape)
+                .background(palette.navActivePillBg, outerShape)
+                .border(1.dp, palette.navActivePillBorder, outerShape)
+        )
+
         Row(
             modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             GlassSegmentTab(
@@ -223,19 +246,10 @@ private fun GlassSegmentTab(
     modifier: Modifier = Modifier
 ) {
     val pillShape = RoundedCornerShape(100.dp)
-    val bgColor by animateColorAsState(
-        targetValue = if (selected) palette.navActivePillBg else Color.Transparent,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "segment_bg_$label"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (selected) palette.navActivePillBorder else Color.Transparent,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "segment_border_$label"
-    )
+    val interactionSource = remember { MutableInteractionSource() }
     val contentColor by animateColorAsState(
         targetValue = if (selected) palette.navActiveContent else MaterialTheme.colorScheme.onSurfaceVariant,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        animationSpec = IosMotion.silkyTween(durationMillis = 220),
         label = "segment_content_$label"
     )
 
@@ -243,12 +257,11 @@ private fun GlassSegmentTab(
         modifier = modifier
             .fillMaxHeight()
             .minimumInteractiveComponentSize()
+            .iosPressScale(interactionSource = interactionSource, pressedScale = 0.96f)
             .clip(pillShape)
-            .background(bgColor, pillShape)
-            .border(1.dp, borderColor, pillShape)
             .semantics { this.selected = selected }
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interactionSource,
                 indication = ripple(bounded = true, color = palette.accentGlow),
                 role = Role.Tab,
                 onClick = onClick
@@ -288,17 +301,6 @@ fun CreativeHeroDropzoneCard(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalGlassPalette.current
-    val infiniteTransition = rememberInfiniteTransition(label = "hero_glow")
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 0.92f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glow_alpha"
-    )
-
     val cardShape = RoundedCornerShape(28.dp)
 
     GlassCard(
@@ -347,50 +349,12 @@ fun CreativeHeroDropzoneCard(
                         )
                 )
 
-                // Bottom-center floating PDF -> EPUB live morph pill
-                Surface(
-                    shape = RoundedCornerShape(100.dp),
-                    color = Color(0xCC091529),
-                    border = BorderStroke(
-                        width = 1.dp,
-                        brush = Brush.horizontalGradient(
-                            listOf(
-                                LuxuryGold.copy(alpha = glowAlpha),
-                                CrystalCyan.copy(alpha = glowAlpha)
-                            )
-                        )
-                    ),
+                // Bottom-center floating PDF -> EPUB live morph pill (isolated draw-phase glow = 0 card recompositions)
+                GlowingMorphBadgePill(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(7.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PictureAsPdf,
-                            contentDescription = null,
-                            tint = LuxuryGold,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = "PDF->EPUB",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.6.sp
-                            ),
-                            color = Color(0xFFF8FAFC)
-                        )
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.MenuBook,
-                            contentDescription = null,
-                            tint = CrystalCyan,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
+                )
             }
 
             // Glass Atelier Body & CTAs
@@ -431,6 +395,7 @@ fun CreativeHeroDropzoneCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
+                            .iosTapBounce(pressedScale = 0.965f)
                             .testTag("select_multiple_pdfs_button"),
                         shape = RoundedCornerShape(100.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -699,6 +664,74 @@ fun RecentAtelierShelf(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Isolated PDF -> EPUB glowing pill badge. Reads its animated alpha exclusively inside
+ * `drawBehind` so the parent hero card and artwork suffer zero per-frame recompositions.
+ */
+@Composable
+private fun GlowingMorphBadgePill(
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "hero_glow")
+    val glowAlphaState = infiniteTransition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 0.92f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow_alpha"
+    )
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(100.dp))
+            .background(Color(0xCC091529), RoundedCornerShape(100.dp))
+            .drawBehind {
+                val alpha = glowAlphaState.value
+                val strokePx = 1.dp.toPx()
+                val radius = size.height / 2f
+                drawRoundRect(
+                    brush = Brush.horizontalGradient(
+                        listOf(
+                            LuxuryGold.copy(alpha = alpha),
+                            CrystalCyan.copy(alpha = alpha)
+                        )
+                    ),
+                    cornerRadius = CornerRadius(radius, radius),
+                    style = Stroke(width = strokePx)
+                )
+            }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.PictureAsPdf,
+                contentDescription = null,
+                tint = LuxuryGold,
+                modifier = Modifier.size(14.dp)
+            )
+            Text(
+                text = "PDF->EPUB",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp
+                ),
+                color = Color(0xFFF8FAFC)
+            )
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                contentDescription = null,
+                tint = CrystalCyan,
+                modifier = Modifier.size(14.dp)
+            )
         }
     }
 }

@@ -1,8 +1,10 @@
 package com.serma.pubify.data.model
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
+@Immutable
 @Entity(tableName = "converted_books")
 data class ConvertedBook(
     @PrimaryKey(autoGenerate = true)

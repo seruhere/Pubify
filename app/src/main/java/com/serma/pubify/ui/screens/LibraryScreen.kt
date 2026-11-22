@@ -91,8 +91,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.serma.pubify.data.model.ConvertedBook
 import com.serma.pubify.ui.components.GlassCard
+import com.serma.pubify.ui.components.IosMotion
 import com.serma.pubify.ui.components.LocalGlassPalette
 import com.serma.pubify.ui.components.LuxuryGold
 import com.serma.pubify.ui.components.LuxuryGoldDeep
@@ -650,7 +652,11 @@ fun LibraryScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 128.dp)
             ) {
-                items(books, key = { it.id }) { book ->
+                items(
+                    items = books,
+                    key = { it.id },
+                    contentType = { "book_card" }
+                ) { book ->
                     val isBookCompleted = book.isCompleted || (book.chapterCount > 1 && book.lastReadChapterIndex >= book.chapterCount - 1)
                     BookListItemCard(
                         book = book,
@@ -673,7 +679,12 @@ fun LibraryScreen(
                             Toast.makeText(context, "Progress reset to chapter 1", Toast.LENGTH_SHORT).show()
                         },
                         onToggleFavorite = { viewModel.toggleFavorite(book) },
-                        onDelete = { bookToDelete = book }
+                        onDelete = { bookToDelete = book },
+                        modifier = Modifier.animateItem(
+                            fadeInSpec = IosMotion.silkyTween(240),
+                            fadeOutSpec = IosMotion.silkyTween(180),
+                            placementSpec = IosMotion.offsetSpring(dampingRatio = 0.85f, stiffness = 420f)
+                        )
                     )
                 }
             }
@@ -747,7 +758,18 @@ fun BookListItemCard(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Book Cover matching Reading Statistics gold-blue framed badge
+            // Book Cover matching Reading Statistics gold-blue framed badge (downsampled async via Coil — zero main-thread disk I/O)
+            val cardContext = LocalContext.current
+            var coverFailed by remember(book.coverImagePath) { mutableStateOf(false) }
+            val coverRequest = remember(book.coverImagePath, cardContext) {
+                book.coverImagePath?.takeIf { it.isNotBlank() }?.let { path ->
+                    ImageRequest.Builder(cardContext)
+                        .data(File(path))
+                        .size(204, 288)
+                        .crossfade(200)
+                        .build()
+                }
+            }
             Box(
                 modifier = Modifier
                     .width(68.dp)
@@ -764,11 +786,12 @@ fun BookListItemCard(
                     .border(1.1.dp, luxuryGoldBlueBorderBrush(0.75f), RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                if (book.coverImagePath != null && File(book.coverImagePath).exists()) {
+                if (coverRequest != null && !coverFailed) {
                     AsyncImage(
-                        model = File(book.coverImagePath),
+                        model = coverRequest,
                         contentDescription = "Cover of ${book.title}",
                         contentScale = ContentScale.Crop,
+                        onError = { coverFailed = true },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {

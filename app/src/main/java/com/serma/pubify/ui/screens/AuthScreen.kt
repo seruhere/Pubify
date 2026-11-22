@@ -61,17 +61,21 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.OutlinedButton
 import androidx.credentials.CredentialManager
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.graphics.graphicsLayer
 import com.serma.pubify.R
-import com.serma.pubify.data.firebase.attemptAutoSignIn
 import com.serma.pubify.data.firebase.handleGoogleSignInResult
 import com.serma.pubify.data.firebase.launchGoogleSignInIntent
 import com.serma.pubify.data.firebase.signInWithGoogle
 import com.serma.pubify.ui.components.CrystalBlue
 import com.serma.pubify.ui.components.GlassBackdrop
 import com.serma.pubify.ui.components.GlassCard
+import com.serma.pubify.ui.components.IosMotion
 import com.serma.pubify.ui.components.LocalGlassPalette
 import com.serma.pubify.ui.components.LuxuryGold
 import com.serma.pubify.ui.components.LuxuryGoldDeep
+import com.serma.pubify.ui.components.iosPressScale
 import com.serma.pubify.ui.components.luxuryBlueColor
 import com.serma.pubify.ui.components.luxuryGoldBlueBorderBrush
 import com.serma.pubify.ui.components.luxuryGoldColor
@@ -87,8 +91,16 @@ fun AuthScreen(
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
     var isSigningIn by remember { mutableStateOf(false) }
-    var isCheckingSavedAccount by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Smooth iOS entrance on screen appear (GPU-only transform)
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+    val entranceProgressState = animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = IosMotion.smoothSpring(),
+        label = "auth_entrance"
+    )
 
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -118,19 +130,8 @@ fun AuthScreen(
     val blue = luxuryBlueColor()
     val isDark = LocalGlassPalette.current.isDark
 
-    LaunchedEffect(Unit) {
-        attemptAutoSignIn(
-            context = context,
-            credentialManager = credentialManager,
-            onSuccess = {
-                isCheckingSavedAccount = false
-                errorMessage = null
-            },
-            onNoSavedCredentials = {
-                isCheckingSavedAccount = false
-            }
-        )
-    }
+    val googleBtnInteraction = remember { MutableInteractionSource() }
+    val offlineBtnInteraction = remember { MutableInteractionSource() }
 
     Box(
         modifier = modifier
@@ -152,7 +153,15 @@ fun AuthScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 520.dp),
+                    .widthIn(max = 520.dp)
+                    .graphicsLayer {
+                        val p = entranceProgressState.value
+                        alpha = p.coerceIn(0f, 1f)
+                        translationY = (1f - p) * 28f
+                        val s = 0.96f + 0.04f * p
+                        scaleX = s
+                        scaleY = s
+                    },
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
@@ -330,7 +339,8 @@ fun AuthScreen(
                                     )
                                 }
                             },
-                            enabled = !isSigningIn && !isCheckingSavedAccount,
+                            enabled = !isSigningIn,
+                            interactionSource = googleBtnInteraction,
                             shape = RoundedCornerShape(100.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = gold,
@@ -341,9 +351,10 @@ fun AuthScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(52.dp)
+                                .iosPressScale(googleBtnInteraction, enabled = !isSigningIn)
                                 .testTag("google_sign_in_button")
                         ) {
-                            if (isSigningIn || isCheckingSavedAccount) {
+                            if (isSigningIn) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(20.dp),
                                     strokeWidth = 2.2.dp,
@@ -351,11 +362,7 @@ fun AuthScreen(
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
-                                    text = if (isCheckingSavedAccount) {
-                                        stringResource(id = R.string.auth_checking_account)
-                                    } else {
-                                        stringResource(id = R.string.auth_signing_in)
-                                    },
+                                    text = stringResource(id = R.string.auth_signing_in),
                                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                                 )
                             } else {
@@ -372,11 +379,13 @@ fun AuthScreen(
                         OutlinedButton(
                             onClick = onSkipSignIn,
                             enabled = !isSigningIn,
+                            interactionSource = offlineBtnInteraction,
                             shape = RoundedCornerShape(100.dp),
                             border = BorderStroke(1.1.dp, blue.copy(alpha = 0.65f)),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
+                                .iosPressScale(offlineBtnInteraction, enabled = !isSigningIn)
                                 .testTag("skip_sign_in_button")
                         ) {
                             Text(

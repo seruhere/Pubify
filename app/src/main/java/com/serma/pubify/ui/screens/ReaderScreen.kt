@@ -2999,8 +2999,8 @@ fun ReaderScreen(
             // Moon+ Discrete Single-Line Status Footer (visible when HUD bars are hidden)
             androidx.compose.animation.AnimatedVisibility(
                 visible = !areBarsVisible,
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = fadeIn(com.serma.pubify.ui.components.IosMotion.silkyTween(220)),
+                exit = fadeOut(com.serma.pubify.ui.components.IosMotion.silkyTween(160)),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -3031,8 +3031,14 @@ fun ReaderScreen(
             // Docked Text-to-Speech Controls Bar
             AnimatedVisibility(
                 visible = ttsState.isVisible || ttsState.isPlaying || ttsState.isPaused,
-                enter = slideInVertically { it } + fadeIn(),
-                exit = slideOutVertically { it } + fadeOut()
+                enter = slideInVertically(
+                    animationSpec = com.serma.pubify.ui.components.IosMotion.offsetSpring(dampingRatio = 0.85f, stiffness = 400f),
+                    initialOffsetY = { it }
+                ) + fadeIn(com.serma.pubify.ui.components.IosMotion.silkyTween(220)),
+                exit = slideOutVertically(
+                    animationSpec = com.serma.pubify.ui.components.IosMotion.offsetSpring(dampingRatio = 0.90f, stiffness = 440f),
+                    targetOffsetY = { it }
+                ) + fadeOut(com.serma.pubify.ui.components.IosMotion.silkyTween(170))
             ) {
                 TtsReaderControlsBar(
                     ttsState = ttsState,
@@ -3049,8 +3055,14 @@ fun ReaderScreen(
             // Moon+ Bottom Reader Control Dock (Auto-hides smoothly with areBarsVisible)
             AnimatedVisibility(
                 visible = areBarsVisible,
-                enter = slideInVertically { it } + fadeIn(),
-                exit = slideOutVertically { it } + fadeOut()
+                enter = slideInVertically(
+                    animationSpec = com.serma.pubify.ui.components.IosMotion.offsetSpring(dampingRatio = 0.85f, stiffness = 400f),
+                    initialOffsetY = { it }
+                ) + fadeIn(com.serma.pubify.ui.components.IosMotion.silkyTween(220)),
+                exit = slideOutVertically(
+                    animationSpec = com.serma.pubify.ui.components.IosMotion.offsetSpring(dampingRatio = 0.90f, stiffness = 440f),
+                    targetOffsetY = { it }
+                ) + fadeOut(com.serma.pubify.ui.components.IosMotion.silkyTween(170))
             ) {
                 MoonReaderQuickDock(
                     settings = settings,

@@ -2,21 +2,25 @@ package com.serma.pubify
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,13 +61,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,6 +91,7 @@ import com.serma.pubify.ui.components.CrystalBlue
 import com.serma.pubify.ui.components.FloatingGlassPillNavBar
 import com.serma.pubify.ui.components.GlassBackdrop
 import com.serma.pubify.ui.components.GlassNavTabItem
+import com.serma.pubify.ui.components.IosMotion
 import com.serma.pubify.ui.components.LuxuryGold
 import com.serma.pubify.ui.components.LuxuryGoldDeep
 import com.serma.pubify.ui.screens.AuthScreen
@@ -135,6 +139,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        preferHighestDisplayRefreshRate()
 
         setContent {
             val viewModel: ConverterViewModel = viewModel()
@@ -222,12 +227,33 @@ class MainActivity : ComponentActivity() {
                         AnimatedVisibility(
                             visible = showLaunchLoadingScreen,
                             enter = fadeIn(tween(120)),
-                            exit = fadeOut(tween(420, easing = FastOutSlowInEasing)),
+                            exit = fadeOut(IosMotion.silkyTween(durationMillis = 380)),
                             modifier = Modifier.fillMaxSize()
                         ) {
                             AppLaunchLoadingScreen(modifier = Modifier.fillMaxSize())
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /** Requests the highest supported refresh rate (90Hz / 120Hz) at native resolution for ProMotion-smooth motion. */
+    private fun preferHighestDisplayRefreshRate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                val activeDisplay = display ?: return
+                val currentMode = activeDisplay.mode
+                val bestMode = activeDisplay.supportedModes
+                    .filter {
+                        it.physicalWidth == currentMode.physicalWidth &&
+                            it.physicalHeight == currentMode.physicalHeight
+                    }
+                    .maxByOrNull { it.refreshRate }
+                if (bestMode != null && bestMode.modeId != currentMode.modeId) {
+                    val params = window.attributes
+                    params.preferredDisplayModeId = bestMode.modeId
+                    window.attributes = params
                 }
             }
         }
@@ -310,11 +336,35 @@ fun MainAppContent(
         // Layer 0: Atmospheric Glassmorphism aurora backdrop
         GlassBackdrop(modifier = Modifier.fillMaxSize())
 
-        // Layer 1: Active Screen Content
-        Crossfade(
+        // Layer 1: Active Screen Content with iOS-style directional fluid transition
+        AnimatedContent(
             targetState = selectedTab,
-            animationSpec = tween(durationMillis = 200),
-            label = "tab_crossfade",
+            transitionSpec = {
+                val movingForward = targetState.ordinal >= initialState.ordinal
+                val enterOffset: (Int) -> Int = { fullWidth ->
+                    val shift = (fullWidth * 0.045f).toInt()
+                    if (movingForward) shift else -shift
+                }
+                val exitOffset: (Int) -> Int = { fullWidth ->
+                    val shift = (fullWidth * 0.03f).toInt()
+                    if (movingForward) -shift else shift
+                }
+                (fadeIn(animationSpec = IosMotion.silkyTween(240)) +
+                    slideInHorizontally(
+                        animationSpec = IosMotion.offsetSpring(dampingRatio = 0.88f, stiffness = 440f),
+                        initialOffsetX = enterOffset
+                    ) +
+                    scaleIn(
+                        initialScale = 0.988f,
+                        animationSpec = IosMotion.silkyTween(240)
+                    )) togetherWith
+                    (fadeOut(animationSpec = IosMotion.silkyTween(170)) +
+                        slideOutHorizontally(
+                            animationSpec = IosMotion.offsetSpring(dampingRatio = 0.90f, stiffness = 460f),
+                            targetOffsetX = exitOffset
+                        ))
+            },
+            label = "ios_tab_transition",
             modifier = Modifier.fillMaxSize()
         ) { tab ->
             when (tab) {
@@ -367,11 +417,17 @@ fun MainAppContent(
             }
         }
 
-        // Layer 2: Floating Glassmorphism Pill Navigation Bar Overlay
+        // Layer 2: Floating Glassmorphism Pill Navigation Bar Overlay with iOS spring glide
         AnimatedVisibility(
             visible = showBottomBar,
-            enter = slideInVertically(initialOffsetY = { it + 120 }) + fadeIn(tween(220)),
-            exit = slideOutVertically(targetOffsetY = { it + 120 }) + fadeOut(tween(180)),
+            enter = slideInVertically(
+                animationSpec = IosMotion.offsetSpring(dampingRatio = 0.84f, stiffness = 380f),
+                initialOffsetY = { it + 120 }
+            ) + fadeIn(IosMotion.silkyTween(220)),
+            exit = slideOutVertically(
+                animationSpec = IosMotion.offsetSpring(dampingRatio = 0.90f, stiffness = 420f),
+                targetOffsetY = { it + 120 }
+            ) + fadeOut(IosMotion.silkyTween(170)),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             FloatingGlassPillNavBar(
@@ -392,14 +448,14 @@ private fun AppLaunchLoadingScreen(
     var revealed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { revealed = true }
 
-    val logoScale by animateFloatAsState(
+    val logoScaleState = animateFloatAsState(
         targetValue = if (revealed) 1f else 0.90f,
-        animationSpec = tween(550, easing = FastOutSlowInEasing),
+        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.78f, stiffness = 300f),
         label = "launch_logo_scale"
     )
-    val contentAlpha by animateFloatAsState(
+    val contentAlphaState = animateFloatAsState(
         targetValue = if (revealed) 1f else 0f,
-        animationSpec = tween(500, easing = FastOutSlowInEasing),
+        animationSpec = IosMotion.silkyTween(durationMillis = 480),
         label = "launch_content_alpha"
     )
 
@@ -420,8 +476,12 @@ private fun AppLaunchLoadingScreen(
         Column(
             modifier = Modifier
                 .padding(horizontal = 32.dp)
-                .alpha(contentAlpha)
-                .scale(logoScale),
+                .graphicsLayer {
+                    val s = logoScaleState.value
+                    scaleX = s
+                    scaleY = s
+                    alpha = contentAlphaState.value
+                },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {

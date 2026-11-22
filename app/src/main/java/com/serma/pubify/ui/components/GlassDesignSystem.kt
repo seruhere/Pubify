@@ -1,26 +1,27 @@
 package com.serma.pubify.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,13 +41,14 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -80,13 +82,15 @@ fun luxuryBlueColor(): Color = if (LocalGlassPalette.current.isDark) CrystalBlue
 fun luxuryGoldBlueBorderBrush(alpha: Float = 0.72f): Brush {
     val gold = luxuryGoldColor()
     val blue = luxuryBlueColor()
-    return Brush.linearGradient(
-        colors = listOf(
-            gold.copy(alpha = alpha * 0.82f),
-            blue.copy(alpha = alpha * 0.68f),
-            LuxuryGoldDeep.copy(alpha = alpha * 0.45f)
+    return remember(gold, blue, alpha) {
+        Brush.linearGradient(
+            colors = listOf(
+                gold.copy(alpha = alpha * 0.82f),
+                blue.copy(alpha = alpha * 0.68f),
+                LuxuryGoldDeep.copy(alpha = alpha * 0.45f)
+            )
         )
-    )
+    }
 }
 
 @Composable
@@ -238,8 +242,8 @@ val LightGlassPalette = GlassPalette(
 val LocalGlassPalette = staticCompositionLocalOf { LiquidGlassPalette }
 
 /**
- * Ambient atmospheric aurora backdrop rendered via drawBehind so glassmorphic
- * cards and the floating pill navigation bar exhibit real translucent depth.
+ * Ambient atmospheric aurora backdrop rendered via drawWithCache so all 4 gradient
+ * shaders are allocated once per size/palette change instead of every frame.
  */
 @Composable
 fun GlassBackdrop(
@@ -247,59 +251,49 @@ fun GlassBackdrop(
 ) {
     val palette = LocalGlassPalette.current
     Box(
-        modifier = modifier.drawBehind {
-            drawRect(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        palette.backdropTop,
-                        palette.backdropMid,
-                        palette.backdropBottom
-                    )
+        modifier = modifier.drawWithCache {
+            val bgBrush = Brush.verticalGradient(
+                colors = listOf(
+                    palette.backdropTop,
+                    palette.backdropMid,
+                    palette.backdropBottom
                 )
             )
-
-            // Top-left primary aurora glow
-            val r1 = size.width * 0.78f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(palette.orbPrimary, Color.Transparent),
-                    center = Offset(size.width * 0.14f, size.height * 0.10f),
-                    radius = r1
-                ),
-                radius = r1,
-                center = Offset(size.width * 0.14f, size.height * 0.10f)
+            val c1 = Offset(size.width * 0.14f, size.height * 0.10f)
+            val r1 = (size.width * 0.78f).coerceAtLeast(1f)
+            val orb1 = Brush.radialGradient(
+                colors = listOf(palette.orbPrimary, Color.Transparent),
+                center = c1,
+                radius = r1
+            )
+            val c2 = Offset(size.width * 0.90f, size.height * 0.44f)
+            val r2 = (size.width * 0.72f).coerceAtLeast(1f)
+            val orb2 = Brush.radialGradient(
+                colors = listOf(palette.orbSecondary, Color.Transparent),
+                center = c2,
+                radius = r2
+            )
+            val c3 = Offset(size.width * 0.25f, size.height * 0.90f)
+            val r3 = (size.width * 0.68f).coerceAtLeast(1f)
+            val orb3 = Brush.radialGradient(
+                colors = listOf(palette.orbTertiary, Color.Transparent),
+                center = c3,
+                radius = r3
             )
 
-            // Mid-right secondary aurora glow
-            val r2 = size.width * 0.72f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(palette.orbSecondary, Color.Transparent),
-                    center = Offset(size.width * 0.90f, size.height * 0.44f),
-                    radius = r2
-                ),
-                radius = r2,
-                center = Offset(size.width * 0.90f, size.height * 0.44f)
-            )
-
-            // Bottom-left subtle teal/indigo glow behind floating pill nav bar
-            val r3 = size.width * 0.68f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(palette.orbTertiary, Color.Transparent),
-                    center = Offset(size.width * 0.25f, size.height * 0.90f),
-                    radius = r3
-                ),
-                radius = r3,
-                center = Offset(size.width * 0.25f, size.height * 0.90f)
-            )
+            onDrawBehind {
+                drawRect(brush = bgBrush)
+                drawCircle(brush = orb1, radius = r1, center = c1)
+                drawCircle(brush = orb2, radius = r2, center = c2)
+                drawCircle(brush = orb3, radius = r3, center = c3)
+            }
         }
     )
 }
 
 /**
  * Modifier that applies a frosted glass translucent gradient fill with a crisp
- * directional specular rim border (luminous top-left catchlight to soft bottom-right edge).
+ * directional specular rim border, with memoized Brush instances for zero-jank scrolling.
  */
 @Composable
 fun Modifier.glassSurface(
@@ -309,51 +303,50 @@ fun Modifier.glassSurface(
     borderWidth: Dp = 1.dp
 ): Modifier {
     val palette = LocalGlassPalette.current
-    val baseTop = if (elevated) palette.elevatedCardTop else palette.cardTop
-    val topColor = if (accentTint != null) {
-        accentTint.copy(alpha = if (palette.isDark) 0.055f else 0.05f).compositeOver(baseTop)
-    } else {
-        baseTop
-    }
-    val bottomColor = if (elevated) palette.elevatedCardBottom else palette.cardBottom
-    val rimColors = if (accentTint != null) {
-        listOf(
-            palette.borderHighlight.copy(alpha = if (palette.isDark) 0.24f else 0.70f),
-            accentTint.copy(alpha = if (palette.isDark) 0.28f else 0.22f),
-            palette.borderShadow
+    val fillBrush = remember(palette, elevated, accentTint) {
+        val baseTop = if (elevated) palette.elevatedCardTop else palette.cardTop
+        val topColor = if (accentTint != null) {
+            accentTint.copy(alpha = if (palette.isDark) 0.055f else 0.05f).compositeOver(baseTop)
+        } else {
+            baseTop
+        }
+        val bottomColor = if (elevated) palette.elevatedCardBottom else palette.cardBottom
+        Brush.linearGradient(
+            colors = listOf(topColor, bottomColor),
+            start = Offset(0f, 0f),
+            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
         )
-    } else {
-        listOf(
-            palette.borderHighlight,
-            palette.borderMid,
-            palette.borderShadow
+    }
+    val borderBrush = remember(palette, accentTint) {
+        val rimColors = if (accentTint != null) {
+            listOf(
+                palette.borderHighlight.copy(alpha = if (palette.isDark) 0.24f else 0.70f),
+                accentTint.copy(alpha = if (palette.isDark) 0.28f else 0.22f),
+                palette.borderShadow
+            )
+        } else {
+            listOf(
+                palette.borderHighlight,
+                palette.borderMid,
+                palette.borderShadow
+            )
+        }
+        Brush.linearGradient(
+            colors = rimColors,
+            start = Offset(0f, 0f),
+            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
         )
     }
 
     return this
         .clip(shape)
-        .background(
-            brush = Brush.linearGradient(
-                colors = listOf(topColor, bottomColor),
-                start = Offset(0f, 0f),
-                end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-            ),
-            shape = shape
-        )
-        .border(
-            width = borderWidth,
-            brush = Brush.linearGradient(
-                colors = rimColors,
-                start = Offset(0f, 0f),
-                end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-            ),
-            shape = shape
-        )
+        .background(brush = fillBrush, shape = shape)
+        .border(width = borderWidth, brush = borderBrush, shape = shape)
 }
 
 /**
- * Reusable Glassmorphism card container with translucent frosted gradient fill
- * and directional specular rim border.
+ * Reusable Glassmorphism card container with translucent frosted gradient fill,
+ * directional specular rim border, and silky GPU iOS press spring when interactive.
  */
 @Composable
 fun GlassCard(
@@ -365,7 +358,15 @@ fun GlassCard(
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     val baseModifier = modifier
+        .then(
+            if (onClick != null) {
+                Modifier.iosPressScale(interactionSource = interactionSource, pressedScale = 0.975f)
+            } else {
+                Modifier
+            }
+        )
         .glassSurface(
             shape = shape,
             elevated = elevated,
@@ -375,7 +376,7 @@ fun GlassCard(
         .then(
             if (onClick != null) {
                 Modifier.clickable(
-                    interactionSource = remember { MutableInteractionSource() },
+                    interactionSource = interactionSource,
                     indication = ripple(bounded = true),
                     onClick = onClick
                 )
@@ -392,6 +393,7 @@ fun GlassCard(
     }
 }
 
+@Immutable
 data class GlassNavTabItem(
     val route: String,
     val title: String,
@@ -418,6 +420,24 @@ fun FloatingGlassPillNavBar(
     val gold = luxuryGoldColor()
     val pillShape = RoundedCornerShape(100.dp)
 
+    val selectedIndex = remember(items, selectedRoute) {
+        items.indexOfFirst { it.route == selectedRoute }.coerceAtLeast(0)
+    }
+    val navBgBrush = remember(palette) {
+        Brush.verticalGradient(colors = listOf(palette.navPillTop, palette.navPillBottom))
+    }
+    val navBorderBrush = remember(palette, gold) {
+        Brush.linearGradient(
+            colors = listOf(
+                gold.copy(alpha = if (palette.isDark) 0.92f else 0.85f),
+                LuxuryGoldDeep.copy(alpha = if (palette.isDark) 0.65f else 0.55f),
+                gold.copy(alpha = if (palette.isDark) 0.50f else 0.40f)
+            ),
+            start = Offset(0f, 0f),
+            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+        )
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -437,47 +457,61 @@ fun FloatingGlassPillNavBar(
                     spotColor = gold.copy(alpha = if (palette.isDark) 0.30f else 0.22f)
                 )
                 .clip(pillShape)
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(palette.navPillTop, palette.navPillBottom)
-                    ),
-                    shape = pillShape
-                )
-                .border(
-                    width = 1.35.dp,
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            gold.copy(alpha = if (palette.isDark) 0.92f else 0.85f),
-                            LuxuryGoldDeep.copy(alpha = if (palette.isDark) 0.65f else 0.55f),
-                            gold.copy(alpha = if (palette.isDark) 0.50f else 0.40f)
-                        ),
-                        start = Offset(0f, 0f),
-                        end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-                    ),
-                    shape = pillShape
-                )
+                .background(brush = navBgBrush, shape = pillShape)
+                .border(width = 1.35.dp, brush = navBorderBrush, shape = pillShape)
                 .testTag("bottom_nav_bar"),
             shape = pillShape,
             color = Color.Transparent
         ) {
-            Row(
+            BoxWithConstraints(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .padding(horizontal = 6.dp, vertical = 5.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxSize()
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
             ) {
-                items.forEach { tab ->
-                    val isSelected = tab.route == selectedRoute
-                    FloatingPillNavItem(
-                        tab = tab,
-                        isSelected = isSelected,
-                        palette = palette,
-                        goldColor = gold,
-                        onClick = { onSelectRoute(tab.route) },
-                        modifier = Modifier.weight(1f)
-                    )
+                val count = items.size.coerceAtLeast(1)
+                val slotWidth = maxWidth / count
+                val indicatorProgress = animateFloatAsState(
+                    targetValue = selectedIndex.toFloat(),
+                    animationSpec = IosMotion.fluidSpring(dampingRatio = 0.80f, stiffness = 420f),
+                    label = "nav_sliding_pill"
+                )
+
+                // iOS-style GPU sliding frosted active capsule indicator
+                Box(
+                    modifier = Modifier
+                        .width(slotWidth)
+                        .fillMaxHeight()
+                        .graphicsLayer {
+                            translationX = indicatorProgress.value * slotWidth.toPx()
+                        }
+                        .padding(horizontal = 1.dp)
+                        .clip(pillShape)
+                        .background(
+                            color = gold.copy(alpha = if (palette.isDark) 0.20f else 0.16f),
+                            shape = pillShape
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = gold.copy(alpha = if (palette.isDark) 0.72f else 0.60f),
+                            shape = pillShape
+                        )
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    items.forEach { tab ->
+                        val isSelected = tab.route == selectedRoute
+                        FloatingPillNavItem(
+                            tab = tab,
+                            isSelected = isSelected,
+                            palette = palette,
+                            goldColor = gold,
+                            onClick = { onSelectRoute(tab.route) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }
@@ -494,45 +528,28 @@ private fun FloatingPillNavItem(
     modifier: Modifier = Modifier
 ) {
     val itemPillShape = RoundedCornerShape(100.dp)
-    val bgColor by animateColorAsState(
-        targetValue = if (isSelected) {
-            goldColor.copy(alpha = if (palette.isDark) 0.20f else 0.16f)
-        } else {
-            Color.Transparent
-        },
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "nav_pill_bg_${tab.route}"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (isSelected) {
-            goldColor.copy(alpha = if (palette.isDark) 0.72f else 0.60f)
-        } else {
-            Color.Transparent
-        },
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "nav_pill_border_${tab.route}"
-    )
+    val interactionSource = remember { MutableInteractionSource() }
     val contentColor by animateColorAsState(
         targetValue = if (isSelected) goldColor else palette.navInactiveContent,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        animationSpec = IosMotion.silkyTween(durationMillis = 220),
         label = "nav_pill_content_${tab.route}"
     )
-    val iconSize by animateDpAsState(
-        targetValue = if (isSelected) 22.dp else 20.dp,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-        label = "nav_icon_size_${tab.route}"
+    // Pure GPU scale animation — zero measure/layout jitter during tab switches
+    val iconScaleState = animateFloatAsState(
+        targetValue = if (isSelected) 1.06f else 0.92f,
+        animationSpec = IosMotion.tactileSpring(),
+        label = "nav_icon_scale_${tab.route}"
     )
 
     Box(
         modifier = modifier
             .fillMaxHeight()
             .minimumInteractiveComponentSize()
+            .iosPressScale(interactionSource = interactionSource, pressedScale = 0.93f)
             .clip(itemPillShape)
-            .background(color = bgColor, shape = itemPillShape)
-            .border(width = 1.dp, color = borderColor, shape = itemPillShape)
             .semantics { selected = isSelected }
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interactionSource,
                 indication = ripple(bounded = true, color = goldColor),
                 role = Role.Tab,
                 onClick = onClick
@@ -549,7 +566,13 @@ private fun FloatingPillNavItem(
                 imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
                 contentDescription = tab.title,
                 tint = contentColor,
-                modifier = Modifier.size(iconSize)
+                modifier = Modifier
+                    .size(22.dp)
+                    .graphicsLayer {
+                        val s = iconScaleState.value
+                        scaleX = s
+                        scaleY = s
+                    }
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
