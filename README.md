@@ -36,8 +36,6 @@ a## 🌟 Key Features
 - **PDF & EPUB Engine**: [PDFBox-Android](https://github.com/TomRoushed/pdfbox-android), Custom EPUB XML generator & ZIP unpacker/parser
 - **Local Database**: [Room Database](https://developer.android.com/training/data-storage/room) with KSP
 - **Asynchronous & Reactive**: Kotlin Coroutines & `StateFlow` / `SharedFlow`
-- **Cloud & AI Integration**: Firebase SDK (Auth, Firestore, App Check), Google Gemini API
-- **Networking**: Retrofit 2, Moshi, OkHttp 4
 - **Image Loading**: Coil
 - **Testing**: JUnit 4, Robolectric, Roborazzi (Screenshot Testing)
 
