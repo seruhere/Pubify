@@ -27,10 +27,6 @@ a## 🌟 Key Features
   - **Local Room Database**: Organizes your collection of books, bookmarks, highlights, and reading stats offline.
   - **Analytics**: Track total reading time, daily reading streaks, pages read, and reading speed.
 
-- **☁️ Cloud Sync & Security**
-  - **Firebase Authentication & Firestore**: Sync your library, reading progress, and bookmarks across devices via Google Sign-In.
-  - **Firebase App Check**: Protects API resources against unauthorized requests.
-
 ---
 
 ## 🛠️ Tech Stack & Architecture
