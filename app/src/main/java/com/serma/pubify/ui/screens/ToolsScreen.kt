@@ -3,7 +3,6 @@ package com.serma.pubify.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.BorderStroke
@@ -24,9 +23,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import android.Manifest
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.MenuBook
@@ -36,11 +38,14 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -72,49 +77,23 @@ import com.serma.pubify.reader.ReaderReadingMode
 import com.serma.pubify.reader.ReaderTextAlign
 import com.serma.pubify.reader.ThemeMode
 import com.serma.pubify.ui.components.GlassCard
+import com.serma.pubify.ui.components.IosMotion
 import com.serma.pubify.ui.components.LocalGlassPalette
 import com.serma.pubify.ui.components.formatBytes
+import com.serma.pubify.ui.components.iosTapBounce
 import com.serma.pubify.ui.components.luxuryBlueColor
 import com.serma.pubify.ui.components.luxuryFilterChipColors
 import com.serma.pubify.ui.components.luxuryGoldBlueBorderBrush
 import com.serma.pubify.ui.components.luxuryGoldColor
 import com.serma.pubify.ui.components.luxurySwitchColors
 import com.serma.pubify.ui.theme.GreenSuccess
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import androidx.credentials.CredentialManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import com.serma.pubify.R
-import com.serma.pubify.data.firebase.handleGoogleSignInResult
-import com.serma.pubify.data.firebase.launchGoogleSignInIntent
-import com.serma.pubify.data.firebase.signInWithGoogle
-import com.serma.pubify.data.firebase.signOutFromFirebase
-import com.serma.pubify.ui.viewmodel.CloudSyncViewModel
-import com.serma.pubify.ui.viewmodel.CloudUiState
 import com.serma.pubify.ui.viewmodel.ConverterViewModel
-import com.google.firebase.auth.FirebaseUser
-import kotlinx.coroutines.launch
 
-private val CacheAmber = Color(0xFFF59E0B)
 private val CacheCoral = Color(0xFFEF4444)
 
 @Composable
 fun ToolsScreen(
     viewModel: ConverterViewModel,
-    cloudSyncViewModel: CloudSyncViewModel? = null,
-    currentUser: FirebaseUser? = null,
     modifier: Modifier = Modifier
 ) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -123,10 +102,21 @@ fun ToolsScreen(
     val cacheSizeBytes by viewModel.cacheSizeBytes.collectAsStateWithLifecycle()
     val isClearingCache by viewModel.isClearingCache.collectAsStateWithLifecycle()
     val lastCacheDelta by viewModel.lastCacheDelta.collectAsStateWithLifecycle()
-    val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
-    val readingSessions by viewModel.readingSessions.collectAsStateWithLifecycle()
-    val allHighlights by viewModel.allHighlights.collectAsStateWithLifecycle()
-    val allBookmarks by viewModel.allBookmarks.collectAsStateWithLifecycle()
+    val storagePermissionStatus by viewModel.storagePermissionStatus.collectAsStateWithLifecycle()
+
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        viewModel.onLegacyStoragePermissionResult(granted)
+    }
+
+    val safOutputFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        if (treeUri != null) {
+            viewModel.onSafOutputFolderGranted(treeUri)
+        }
+    }
 
     val gold = luxuryGoldColor()
     val blue = luxuryBlueColor()
@@ -136,6 +126,7 @@ fun ToolsScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshCacheSize()
+        viewModel.refreshStoragePermissionState()
     }
 
     val scrollState = rememberScrollState()
@@ -148,7 +139,6 @@ fun ToolsScreen(
             .testTag("settings_screen"),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        // Luxury Gold & Blue Editorial Header
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -194,36 +184,7 @@ fun ToolsScreen(
             }
         }
 
-        // 0. Cloud Sync & Account Card (Firebase Auth + Firestore)
-        if (cloudSyncViewModel != null && currentUser != null) {
-            CloudAccountSyncCard(
-                cloudSyncViewModel = cloudSyncViewModel,
-                currentUser = currentUser,
-                onSyncNow = {
-                    cloudSyncViewModel.syncFullLibraryNow(
-                        displayName = currentUser.displayName ?: "Pubify Reader",
-                        email = currentUser.email,
-                        photoUrl = currentUser.photoUrl?.toString(),
-                        books = allBooks,
-                        sessions = readingSessions,
-                        highlights = allHighlights,
-                        bookmarks = allBookmarks
-                    )
-                },
-                onSwitchToOffline = { viewModel.setGuestMode(true) },
-                gold = gold,
-                blue = blue,
-                isDark = isDark
-            )
-        } else {
-            GuestCloudSignInCard(
-                gold = gold,
-                blue = blue,
-                isDark = isDark
-            )
-        }
-
-        // 1. Display & Theme Card (Gold Accent)
+        // 1. Display & Theme Card
         GlassCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -261,6 +222,7 @@ fun ToolsScreen(
                     colors = goldChips,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .iosTapBounce(pressedScale = 0.96f)
                         .testTag("theme_chip_liquid_glass")
                 )
 
@@ -278,6 +240,7 @@ fun ToolsScreen(
                         colors = blueChips,
                         modifier = Modifier
                             .weight(1f)
+                            .iosTapBounce(pressedScale = 0.94f)
                             .testTag("theme_chip_dark")
                     )
 
@@ -291,6 +254,7 @@ fun ToolsScreen(
                         colors = goldChips,
                         modifier = Modifier
                             .weight(1f)
+                            .iosTapBounce(pressedScale = 0.94f)
                             .testTag("theme_chip_light")
                     )
 
@@ -304,13 +268,14 @@ fun ToolsScreen(
                         colors = blueChips,
                         modifier = Modifier
                             .weight(1f)
+                            .iosTapBounce(pressedScale = 0.94f)
                             .testTag("theme_chip_system")
                     )
                 }
             }
         }
 
-        // 2. Conversion Defaults Card (Crystal Blue Accent)
+        // 2. Conversion Defaults Card
         GlassCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -382,7 +347,9 @@ fun ToolsScreen(
                                 },
                                 label = { Text(label) },
                                 colors = blueChips,
-                                modifier = Modifier.testTag("setting_margin_${preset.name.lowercase()}")
+                                modifier = Modifier
+                                    .iosTapBounce(pressedScale = 0.94f)
+                                    .testTag("setting_margin_${preset.name.lowercase()}")
                             )
                         }
                     }
@@ -416,7 +383,9 @@ fun ToolsScreen(
                                 },
                                 label = { Text(label) },
                                 colors = goldChips,
-                                modifier = Modifier.testTag("setting_compression_${preset.name.lowercase()}")
+                                modifier = Modifier
+                                    .iosTapBounce(pressedScale = 0.94f)
+                                    .testTag("setting_compression_${preset.name.lowercase()}")
                             )
                         }
                     }
@@ -424,7 +393,7 @@ fun ToolsScreen(
             }
         }
 
-        // 3. Reader Preferences Card (Blue Section Border + Golden Typography matching Conversion Defaults)
+        // 3. Reader Preferences Card
         GlassCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -468,6 +437,7 @@ fun ToolsScreen(
                                 colors = blueChips,
                                 modifier = Modifier
                                     .weight(1f)
+                                    .iosTapBounce(pressedScale = 0.94f)
                                     .testTag("setting_reading_mode_${mode.name.lowercase()}")
                             )
                         }
@@ -494,7 +464,9 @@ fun ToolsScreen(
                                 },
                                 label = { Text(mode.displayName) },
                                 colors = goldChips,
-                                modifier = Modifier.testTag("setting_page_turn_${mode.name.lowercase()}")
+                                modifier = Modifier
+                                    .iosTapBounce(pressedScale = 0.94f)
+                                    .testTag("setting_page_turn_${mode.name.lowercase()}")
                             )
                         }
                     }
@@ -524,6 +496,7 @@ fun ToolsScreen(
                                 colors = blueChips,
                                 modifier = Modifier
                                     .weight(1f)
+                                    .iosTapBounce(pressedScale = 0.94f)
                                     .testTag("setting_text_align_${align.name.lowercase()}")
                             )
                         }
@@ -542,7 +515,147 @@ fun ToolsScreen(
             }
         }
 
-        // 4. Clean Clear Cache Card (Blue Section Border + Golden Typography + Live Color-Coded Change Feedback)
+        // 3b. Storage Permission & Output Folder Card
+        val storageGranted = storagePermissionStatus.hasSharedStorageAccess
+        val storageBadgeColor = if (storageGranted) GreenSuccess else gold
+        val storageBadgeText = when {
+            storagePermissionStatus.mode == com.serma.pubify.converter.DeviceStorageMode.SAF_FOLDER -> "Folder Granted"
+            storagePermissionStatus.mode == com.serma.pubify.converter.DeviceStorageMode.SCOPED_DOWNLOADS -> "Allowed"
+            storagePermissionStatus.mode == com.serma.pubify.converter.DeviceStorageMode.APP_ONLY -> "App Only"
+            else -> "Not Granted"
+        }
+
+        GlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("storage_permission_card"),
+            shape = RoundedCornerShape(22.dp),
+            accentTint = blue
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp)
+                    ) {
+                        SettingsSectionHeader(
+                            icon = Icons.Default.FolderOpen,
+                            title = "Storage Permission",
+                            subtitle = "Where converted EPUBs are saved",
+                            accentColor = blue,
+                            titleColor = gold
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(100.dp),
+                        color = storageBadgeColor.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, storageBadgeColor.copy(alpha = 0.5f)),
+                        modifier = Modifier.testTag("storage_permission_status_badge")
+                    ) {
+                        Text(
+                            text = storageBadgeText,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = storageBadgeColor,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = blue.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, blue.copy(alpha = 0.28f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = "Save Destination",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = storagePermissionStatus.displayLocation,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("storage_destination_text")
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        if (storagePermissionStatus.isLegacyRuntimePermissionRequired) {
+                            legacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        } else {
+                            safOutputFolderLauncher.launch(null)
+                        }
+                    },
+                    shape = RoundedCornerShape(100.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = gold,
+                        contentColor = Color(0xFF0A1020)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .iosTapBounce(pressedScale = 0.96f)
+                        .testTag("settings_grant_storage_button")
+                ) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (storagePermissionStatus.isLegacyRuntimePermissionRequired) {
+                            if (storageGranted) "Storage Permission Granted" else "Request Storage Permission"
+                        } else {
+                            if (storagePermissionStatus.mode == com.serma.pubify.converter.DeviceStorageMode.SAF_FOLDER) {
+                                "Change Authorized Folder"
+                            } else {
+                                "Grant Folder Access"
+                            }
+                        },
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+
+                if (!storagePermissionStatus.isLegacyRuntimePermissionRequired &&
+                    storagePermissionStatus.mode != com.serma.pubify.converter.DeviceStorageMode.SCOPED_DOWNLOADS
+                ) {
+                    OutlinedButton(
+                        onClick = { viewModel.onConfirmScopedDownloads() },
+                        shape = RoundedCornerShape(100.dp),
+                        border = BorderStroke(1.dp, blue.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .iosTapBounce(pressedScale = 0.96f)
+                            .testTag("settings_use_downloads_button")
+                    ) {
+                        Text(
+                            text = "Use Downloads/Pubify",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = gold
+                        )
+                    }
+                }
+            }
+        }
+
+        // 4. Clean Clear Cache Card
         val isCacheClean = cacheSizeBytes <= 0L
         val cacheStatusColor by animateColorAsState(
             targetValue = when {
@@ -550,7 +663,7 @@ fun ToolsScreen(
                 cacheSizeBytes > 25L * 1024L * 1024L -> CacheCoral
                 else -> gold
             },
-            animationSpec = tween(400),
+            animationSpec = IosMotion.silkyTween(320),
             label = "cache_status_color"
         )
         val rawFillFraction = when {
@@ -559,7 +672,7 @@ fun ToolsScreen(
         }
         val animatedFillFraction by animateFloatAsState(
             targetValue = rawFillFraction,
-            animationSpec = tween(500),
+            animationSpec = IosMotion.fluidSpring(dampingRatio = 0.84f, stiffness = 340f),
             label = "cache_fill_bar"
         )
 
@@ -622,7 +735,6 @@ fun ToolsScreen(
                     }
                 }
 
-                // Animated visual cache gauge bar
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -641,10 +753,11 @@ fun ToolsScreen(
                     )
                 }
 
-                // Visual before -> after cache change feedback pill
                 AnimatedVisibility(
                     visible = lastCacheDelta != null,
-                    enter = fadeIn(tween(250)) + expandVertically()
+                    enter = fadeIn(IosMotion.silkyTween(250)) + expandVertically(
+                        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.85f, stiffness = 400f)
+                    )
                 ) {
                     lastCacheDelta?.let { delta ->
                         val hasFreed = delta.freedBytes > 0L
@@ -722,6 +835,7 @@ fun ToolsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
+                        .iosTapBounce(pressedScale = 0.96f, enabled = !isClearingCache)
                         .testTag("clear_cache_button")
                 ) {
                     if (isClearingCache) {
@@ -750,7 +864,7 @@ fun ToolsScreen(
             }
         }
 
-        // 5. About & Privacy Architecture Card (Gold & Blue Rim)
+        // 5. About & Privacy Architecture Card
         GlassCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(22.dp),
@@ -782,299 +896,25 @@ fun ToolsScreen(
                         )
                     }
                     Text(
-                        text = "About App",
+                        text = "About Pubify",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
 
                 Text(
-                    text = "100% Offline Processing • On-Device EPUB Engine • Unlimited Conversions",
+                    text = "Offline-First & Private • Zero Account Required • On-Device EPUB Engine • Unlimited Conversions",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        // Bottom clearance above floating glass pill navigation bar
         Spacer(
             modifier = Modifier
                 .navigationBarsPadding()
                 .height(92.dp)
         )
-    }
-}
-
-@Composable
-private fun CloudAccountSyncCard(
-    cloudSyncViewModel: CloudSyncViewModel,
-    currentUser: FirebaseUser,
-    onSyncNow: () -> Unit,
-    onSwitchToOffline: () -> Unit,
-    gold: Color,
-    blue: Color,
-    isDark: Boolean
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
-
-    val cloudBooksState by cloudSyncViewModel.cloudBooksState.collectAsStateWithLifecycle()
-    val cloudSessionsState by cloudSyncViewModel.cloudSessionsState.collectAsStateWithLifecycle()
-    val isSyncing by cloudSyncViewModel.isSyncing.collectAsStateWithLifecycle()
-    val syncStatusMessage by cloudSyncViewModel.syncStatusMessage.collectAsStateWithLifecycle()
-    val syncError by cloudSyncViewModel.syncError.collectAsStateWithLifecycle()
-
-    val syncedBooksLabel = when (val state = cloudBooksState) {
-        is CloudUiState.Loading -> "Loading..."
-        is CloudUiState.Success -> "${state.data.size} synced"
-        is CloudUiState.Error -> "Offline"
-    }
-    val syncedSessionsLabel = when (val state = cloudSessionsState) {
-        is CloudUiState.Loading -> "..."
-        is CloudUiState.Success -> "${state.data.size} logs"
-        is CloudUiState.Error -> "Offline"
-    }
-
-    GlassCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("cloud_sync_account_card"),
-        shape = RoundedCornerShape(22.dp),
-        elevated = true,
-        accentTint = gold,
-        borderWidth = 1.25.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(
-                                        gold.copy(alpha = if (isDark) 0.22f else 0.16f),
-                                        blue.copy(alpha = if (isDark) 0.22f else 0.14f)
-                                    )
-                                )
-                            )
-                            .border(1.dp, luxuryGoldBlueBorderBrush(0.75f), RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CloudDone,
-                            contentDescription = null,
-                            tint = gold,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = stringResource(id = R.string.cloud_sync_title),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = gold
-                        )
-                        Text(
-                            text = "Firebase Firestore • Connected",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(100.dp),
-                    color = GreenSuccess.copy(alpha = 0.16f),
-                    border = BorderStroke(1.dp, GreenSuccess.copy(alpha = 0.5f))
-                ) {
-                    Text(
-                        text = "Active",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = GreenSuccess,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            // Account identity & live cloud counts pill
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = if (isDark) Color(0x33152946) else blue.copy(alpha = 0.08f),
-                border = BorderStroke(
-                    width = 1.dp,
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(gold.copy(alpha = 0.45f), blue.copy(alpha = 0.45f))
-                    )
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(gold.copy(alpha = 0.18f))
-                            .border(1.dp, gold.copy(alpha = 0.55f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = null,
-                            tint = gold,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = currentUser.displayName?.takeIf { it.isNotBlank() } ?: "Pubify Reader",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        currentUser.email?.takeIf { it.isNotBlank() }?.let { email ->
-                            Text(
-                                text = email,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Books: $syncedBooksLabel  •  Sessions: $syncedSessionsLabel",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = gold
-                        )
-                    }
-                }
-            }
-
-            AnimatedVisibility(visible = syncStatusMessage != null || syncError != null) {
-                val isError = syncError != null
-                val message = syncError ?: syncStatusMessage.orEmpty()
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isError) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f) else blue.copy(alpha = 0.12f),
-                    border = BorderStroke(
-                        1.dp,
-                        if (isError) MaterialTheme.colorScheme.error.copy(alpha = 0.55f) else GreenSuccess.copy(alpha = 0.55f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isError) Icons.Default.ErrorOutline else Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = if (isError) MaterialTheme.colorScheme.error else GreenSuccess,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Button(
-                    onClick = onSyncNow,
-                    enabled = !isSyncing,
-                    shape = RoundedCornerShape(100.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = gold,
-                        contentColor = Color(0xFF0A1426),
-                        disabledContainerColor = gold.copy(alpha = 0.45f)
-                    ),
-                    modifier = Modifier
-                        .weight(1.3f)
-                        .height(48.dp)
-                        .testTag("cloud_sync_now_button")
-                ) {
-                    if (isSyncing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color(0xFF0A1426)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Syncing...", fontWeight = FontWeight.Bold)
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.CloudSync,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = stringResource(id = R.string.cloud_sync_now),
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        onSwitchToOffline()
-                        signOutFromFirebase(credentialManager, scope)
-                    },
-                    shape = RoundedCornerShape(100.dp),
-                    border = BorderStroke(1.1.dp, blue.copy(alpha = 0.65f)),
-                    modifier = Modifier
-                        .weight(0.9f)
-                        .height(48.dp)
-                        .testTag("cloud_sign_out_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Logout,
-                        contentDescription = null,
-                        tint = gold,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = stringResource(id = R.string.cloud_sign_out),
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                        color = gold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -1153,216 +993,9 @@ private fun SettingsSwitchRow(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = luxurySwitchColors(),
-            modifier = Modifier.testTag(testTag)
-        )
-    }
-}
-
-@Composable
-private fun GuestCloudSignInCard(
-    gold: Color,
-    blue: Color,
-    isDark: Boolean
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
-
-    var isSigningIn by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    val googleSignInLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            scope.launch {
-                isSigningIn = true
-                errorMessage = null
-                handleGoogleSignInResult(
-                    data = result.data,
-                    onSuccess = {
-                        isSigningIn = false
-                        errorMessage = null
-                    },
-                    onAuthError = { msg ->
-                        isSigningIn = false
-                        errorMessage = msg
-                    }
-                )
-            }
-        } else {
-            isSigningIn = false
-        }
-    }
-
-    GlassCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("guest_cloud_sign_in_card"),
-        shape = RoundedCornerShape(22.dp),
-        elevated = true,
-        accentTint = gold,
-        borderWidth = 1.25.dp
-    ) {
-        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(
-                                        gold.copy(alpha = if (isDark) 0.22f else 0.16f),
-                                        blue.copy(alpha = if (isDark) 0.22f else 0.14f)
-                                    )
-                                )
-                            )
-                            .border(1.dp, luxuryGoldBlueBorderBrush(0.75f), RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CloudSync,
-                            contentDescription = null,
-                            tint = gold,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = stringResource(id = R.string.settings_cloud_sign_in_title),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = gold
-                        )
-                        Text(
-                            text = stringResource(id = R.string.settings_cloud_sign_in_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Surface(
-                    shape = RoundedCornerShape(100.dp),
-                    color = gold.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, gold.copy(alpha = 0.45f))
-                ) {
-                    Text(
-                        text = "Offline",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = gold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            AnimatedVisibility(visible = errorMessage != null) {
-                errorMessage?.let { err ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ErrorOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = err,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-            }
-
-            Button(
-                onClick = {
-                    if (isSigningIn) return@Button
-                    isSigningIn = true
-                    errorMessage = null
-                    scope.launch {
-                        signInWithGoogle(
-                            context = context,
-                            credentialManager = credentialManager,
-                            onSuccess = {
-                                isSigningIn = false
-                                errorMessage = null
-                            },
-                            onAuthCancelled = {
-                                isSigningIn = false
-                            },
-                            onAuthError = { msg ->
-                                isSigningIn = false
-                                errorMessage = msg
-                            },
-                            onFallbackToPlayServicesIntent = {
-                                googleSignInLauncher.launch(launchGoogleSignInIntent(context))
-                            }
-                        )
-                    }
-                },
-                enabled = !isSigningIn,
-                shape = RoundedCornerShape(100.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = gold,
-                    contentColor = Color(0xFF0A1426),
-                    disabledContainerColor = gold.copy(alpha = 0.45f)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("settings_google_sign_in_button")
-            ) {
-                if (isSigningIn) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = Color(0xFF0A1426)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Signing in...", fontWeight = FontWeight.Bold)
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.CloudDone,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(id = R.string.auth_sign_in_google),
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                    )
-                }
-            }
-        }
+                .iosTapBounce(pressedScale = 0.93f)
+                .testTag(testTag)
+        )
     }
 }

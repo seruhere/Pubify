@@ -101,6 +101,8 @@ import com.serma.pubify.ui.components.LuxuryGoldDeep
 import com.serma.pubify.ui.components.CrystalBlue
 import com.serma.pubify.ui.components.formatBytes
 import com.serma.pubify.ui.components.glassSurface
+import com.serma.pubify.ui.components.iosMenuReveal
+import com.serma.pubify.ui.components.iosTapBounce
 import com.serma.pubify.ui.components.luxuryBlueColor
 import com.serma.pubify.ui.components.luxuryFilterChipColors
 import com.serma.pubify.ui.components.luxuryGoldBlueBorderBrush
@@ -350,6 +352,7 @@ fun LibraryScreen(
                     ),
                     modifier = Modifier
                         .size(48.dp)
+                        .iosTapBounce(pressedScale = 0.90f)
                         .testTag("library_dark_mode_toggle")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -428,7 +431,9 @@ fun LibraryScreen(
                         borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f),
                         selectedBorderColor = gold.copy(alpha = 0.55f)
                     ),
-                    modifier = Modifier.testTag("filter_all")
+                    modifier = Modifier
+                        .iosTapBounce(pressedScale = 0.94f)
+                        .testTag("filter_all")
                 )
             }
             item {
@@ -451,7 +456,9 @@ fun LibraryScreen(
                         borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f),
                         selectedBorderColor = gold.copy(alpha = 0.55f)
                     ),
-                    modifier = Modifier.testTag("filter_favorites")
+                    modifier = Modifier
+                        .iosTapBounce(pressedScale = 0.94f)
+                        .testTag("filter_favorites")
                 )
             }
             item {
@@ -466,7 +473,9 @@ fun LibraryScreen(
                         borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f),
                         selectedBorderColor = gold.copy(alpha = 0.55f)
                     ),
-                    modifier = Modifier.testTag("filter_reading")
+                    modifier = Modifier
+                        .iosTapBounce(pressedScale = 0.94f)
+                        .testTag("filter_reading")
                 )
             }
             item {
@@ -481,7 +490,9 @@ fun LibraryScreen(
                         borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f),
                         selectedBorderColor = gold.copy(alpha = 0.55f)
                     ),
-                    modifier = Modifier.testTag("filter_completed")
+                    modifier = Modifier
+                        .iosTapBounce(pressedScale = 0.94f)
+                        .testTag("filter_completed")
                 )
             }
         }
@@ -503,7 +514,8 @@ fun LibraryScreen(
                     selected = sortOrder == BookSortOrder.DATE_DESC,
                     borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f),
                     selectedBorderColor = gold.copy(alpha = 0.55f)
-                )
+                ),
+                modifier = Modifier.iosTapBounce(pressedScale = 0.94f)
             )
             FilterChip(
                 selected = sortOrder == BookSortOrder.TITLE_ASC,
@@ -515,7 +527,8 @@ fun LibraryScreen(
                     selected = sortOrder == BookSortOrder.TITLE_ASC,
                     borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f),
                     selectedBorderColor = gold.copy(alpha = 0.55f)
-                )
+                ),
+                modifier = Modifier.iosTapBounce(pressedScale = 0.94f)
             )
             FilterChip(
                 selected = sortOrder == BookSortOrder.PAGES_DESC,
@@ -527,7 +540,8 @@ fun LibraryScreen(
                     selected = sortOrder == BookSortOrder.PAGES_DESC,
                     borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.30f),
                     selectedBorderColor = gold.copy(alpha = 0.55f)
-                )
+                ),
+                modifier = Modifier.iosTapBounce(pressedScale = 0.94f)
             )
         }
 
@@ -608,7 +622,9 @@ fun LibraryScreen(
                                         )
                                     )
                                 ),
-                                modifier = Modifier.testTag("empty_state_convert_button")
+                                modifier = Modifier
+                                    .iosTapBounce(pressedScale = 0.95f)
+                                    .testTag("empty_state_convert_button")
                             ) {
                                 Text(
                                     text = "Convert a PDF Now",
@@ -630,7 +646,8 @@ fun LibraryScreen(
                                             blue.copy(alpha = 0.65f)
                                         )
                                     )
-                                )
+                                ),
+                                modifier = Modifier.iosTapBounce(pressedScale = 0.95f)
                             ) {
                                 Text(
                                     text = "Show All Books",
@@ -701,6 +718,7 @@ fun LibraryScreen(
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
                 .padding(end = 20.dp, bottom = 92.dp)
+                .iosTapBounce(pressedScale = 0.91f)
                 .glassSurface(shape = RoundedCornerShape(18.dp), elevated = true, accentTint = fabGold, borderWidth = 1.25.dp)
                 .border(1.1.dp, luxuryGoldBlueBorderBrush(0.75f), RoundedCornerShape(18.dp)),
             shape = RoundedCornerShape(18.dp),
@@ -917,7 +935,10 @@ fun BookListItemCard(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = onToggleFavorite) {
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.iosTapBounce(pressedScale = 0.86f)
+                ) {
                     Icon(
                         imageVector = if (book.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = "Favorite",
@@ -928,7 +949,9 @@ fun BookListItemCard(
                 Box {
                     IconButton(
                         onClick = { menuExpanded = true },
-                        modifier = Modifier.testTag("book_menu_button_${book.id}")
+                        modifier = Modifier
+                            .iosTapBounce(pressedScale = 0.86f)
+                            .testTag("book_menu_button_${book.id}")
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
@@ -939,7 +962,10 @@ fun BookListItemCard(
                     DropdownMenu(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
-                        modifier = Modifier.testTag("book_dropdown_menu_${book.id}")
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .iosMenuReveal(visible = menuExpanded)
+                            .testTag("book_dropdown_menu_${book.id}")
                     ) {
                         DropdownMenuItem(
                             text = { Text("Read in App") },
@@ -948,7 +974,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onOpenReader()
                             },
-                            modifier = Modifier.testTag("menu_read_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_read_${book.id}")
                         )
                         DropdownMenuItem(
                             text = { Text("Share to Apps") },
@@ -957,7 +985,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onShare()
                             },
-                            modifier = Modifier.testTag("menu_share_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_share_${book.id}")
                         )
                         DropdownMenuItem(
                             text = { Text("Export to Storage (.epub)") },
@@ -966,7 +996,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onExportToStorage()
                             },
-                            modifier = Modifier.testTag("menu_export_storage_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_export_storage_${book.id}")
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
@@ -976,7 +1008,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onViewDetails()
                             },
-                            modifier = Modifier.testTag("menu_details_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_details_${book.id}")
                         )
                         DropdownMenuItem(
                             text = { Text("Edit Title & Author") },
@@ -985,7 +1019,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onEditDetails()
                             },
-                            modifier = Modifier.testTag("menu_edit_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_edit_${book.id}")
                         )
                         DropdownMenuItem(
                             text = {
@@ -1005,7 +1041,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onToggleCompleted()
                             },
-                            modifier = Modifier.testTag("menu_toggle_completed_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_toggle_completed_${book.id}")
                         )
                         DropdownMenuItem(
                             text = { Text("Restart Reading (0%)") },
@@ -1014,7 +1052,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onResetProgress()
                             },
-                            modifier = Modifier.testTag("menu_restart_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_restart_${book.id}")
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
@@ -1026,7 +1066,9 @@ fun BookListItemCard(
                                 menuExpanded = false
                                 onDelete()
                             },
-                            modifier = Modifier.testTag("menu_delete_${book.id}")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.97f)
+                                .testTag("menu_delete_${book.id}")
                         )
                     }
                 }

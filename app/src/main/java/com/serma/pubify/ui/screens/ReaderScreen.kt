@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -138,6 +139,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -189,6 +191,8 @@ import com.serma.pubify.ui.components.LuxuryGold
 import com.serma.pubify.ui.components.TtsReaderControlsBar
 import com.serma.pubify.ui.components.WordInspectState
 import com.serma.pubify.ui.components.formatBytes
+import com.serma.pubify.ui.components.iosMenuReveal
+import com.serma.pubify.ui.components.iosTapBounce
 import com.serma.pubify.ui.components.luxuryBlueColor
 import com.serma.pubify.ui.components.luxuryGoldBlueBorderBrush
 import com.serma.pubify.ui.components.luxuryGoldColor
@@ -1662,7 +1666,7 @@ fun ReaderScreen(
                     ) {
                         IconButton(
                             onClick = {
-                                val next = (settings.fontSizeSp - 1f).coerceIn(13f, 28f)
+                                val next = (settings.fontSizeSp - 1f).coerceIn(12f, 34f)
                                 viewModel.updateReaderSettings { it.copy(fontSizeSp = next) }
                             },
                             modifier = Modifier
@@ -1680,12 +1684,12 @@ fun ReaderScreen(
                         }
 
                         Slider(
-                            value = settings.fontSizeSp,
+                            value = settings.fontSizeSp.coerceIn(12f, 34f),
                             onValueChange = { size ->
                                 viewModel.updateReaderSettings { it.copy(fontSizeSp = size) }
                             },
-                            valueRange = 13f..28f,
-                            steps = 14,
+                            valueRange = 12f..34f,
+                            steps = 21,
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("reader_font_size_slider")
@@ -1693,7 +1697,7 @@ fun ReaderScreen(
 
                         IconButton(
                             onClick = {
-                                val next = (settings.fontSizeSp + 1f).coerceIn(13f, 28f)
+                                val next = (settings.fontSizeSp + 1f).coerceIn(12f, 34f)
                                 viewModel.updateReaderSettings { it.copy(fontSizeSp = next) }
                             },
                             modifier = Modifier
@@ -2028,7 +2032,9 @@ fun ReaderScreen(
                 ) {
                     IconButton(
                         onClick = onNavigateToLibrary,
-                        modifier = Modifier.testTag("reader_back_button")
+                        modifier = Modifier
+                            .iosTapBounce(pressedScale = 0.88f)
+                            .testTag("reader_back_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -2063,7 +2069,9 @@ fun ReaderScreen(
                         // 1. Quick Dark / Light Mode Toggle
                         IconButton(
                             onClick = { viewModel.toggleReaderDarkTheme() },
-                            modifier = Modifier.testTag("reader_quick_theme_toggle")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.88f)
+                                .testTag("reader_quick_theme_toggle")
                         ) {
                             Icon(
                                 imageVector = if (settings.theme.isDark) Icons.Default.LightMode else Icons.Default.DarkMode,
@@ -2075,7 +2083,9 @@ fun ReaderScreen(
                         // 2. Table of Contents
                         IconButton(
                             onClick = { showTocSheet = true },
-                            modifier = Modifier.testTag("reader_toc_button")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.88f)
+                                .testTag("reader_toc_button")
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
@@ -2092,7 +2102,9 @@ fun ReaderScreen(
                                 }
                                 viewModel.toggleTtsPlayPause()
                             },
-                            modifier = Modifier.testTag("reader_tts_toggle_button")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.88f)
+                                .testTag("reader_tts_toggle_button")
                         ) {
                             Icon(
                                 imageVector = if (ttsState.isPlaying) Icons.Default.GraphicEq else Icons.Default.Headphones,
@@ -2107,7 +2119,9 @@ fun ReaderScreen(
                                 userActivityTime = System.currentTimeMillis()
                                 toggleCurrentPageBookmark()
                             },
-                            modifier = Modifier.testTag("reader_bookmark_toggle_button")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.88f)
+                                .testTag("reader_bookmark_toggle_button")
                         ) {
                             Icon(
                                 imageVector = if (isCurrentPageBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
@@ -2119,7 +2133,9 @@ fun ReaderScreen(
                         // 4. Appearance Settings
                         IconButton(
                             onClick = { showSettingsSheet = true },
-                            modifier = Modifier.testTag("reader_settings_button")
+                            modifier = Modifier
+                                .iosTapBounce(pressedScale = 0.88f)
+                                .testTag("reader_settings_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.FormatSize,
@@ -2132,7 +2148,9 @@ fun ReaderScreen(
                         Box {
                             IconButton(
                                 onClick = { showOverflowMenu = true },
-                                modifier = Modifier.testTag("reader_more_options_btn")
+                                modifier = Modifier
+                                    .iosTapBounce(pressedScale = 0.88f)
+                                    .testTag("reader_more_options_btn")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.MoreVert,
@@ -2158,10 +2176,11 @@ fun ReaderScreen(
                                 onDismissRequest = { showOverflowMenu = false },
                                 containerColor = menuContainerColor,
                                 border = BorderStroke(1.dp, menuBorderColor),
-                                shape = RoundedCornerShape(14.dp),
-                                shadowElevation = 8.dp,
+                                shape = RoundedCornerShape(16.dp),
+                                shadowElevation = 10.dp,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
+                                    .iosMenuReveal(visible = showOverflowMenu)
+                                    .clip(RoundedCornerShape(16.dp))
                                     .testTag("reader_overflow_dropdown_menu")
                             ) {
                                 DropdownMenuItem(
@@ -2510,6 +2529,16 @@ fun ReaderScreen(
         val marginBottomDp = (book.epubMargins.bottomPercent * 2.2f).coerceIn(14f, 36f).dp
 
         val readerContainerCoordsRef = remember { CoordsRef() }
+        var pinchZoomHudText by remember { mutableStateOf<String?>(null) }
+        var pinchZoomHudToken by remember { mutableLongStateOf(0L) }
+        val latestFontSizeSp by androidx.compose.runtime.rememberUpdatedState(settings.fontSizeSp)
+
+        LaunchedEffect(pinchZoomHudToken) {
+            if (pinchZoomHudToken > 0L) {
+                delay(1250L)
+                pinchZoomHudText = null
+            }
+        }
 
         BoxWithConstraints(
             modifier = Modifier
@@ -2519,12 +2548,58 @@ fun ReaderScreen(
                 .onGloballyPositioned { coords ->
                     readerContainerCoordsRef.coords = coords
                 }
+                // Smooth two-finger pinch-to-zoom across both Paginated and Scroll modes
+                // Only activates when 2+ pointers are down so 1-finger scroll, swipes, taps & long-press stay untouched
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        var isPinching = false
+                        var workingSize = latestFontSizeSp.coerceIn(12f, 34f)
+                        var lastAppliedSize = workingSize
+                        var cumulativeZoom = 1f
+
+                        while (true) {
+                            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                            val pressedCount = event.changes.count { it.pressed }
+                            if (pressedCount == 0) break
+
+                            if (pressedCount >= 2) {
+                                val zoom = event.calculateZoom()
+                                if (zoom.isFinite() && zoom > 0f) {
+                                    cumulativeZoom *= zoom
+                                    if (!isPinching && abs(cumulativeZoom - 1f) > 0.018f) {
+                                        isPinching = true
+                                        workingSize = latestFontSizeSp.coerceIn(12f, 34f)
+                                        lastAppliedSize = workingSize
+                                    }
+                                    if (isPinching && abs(zoom - 1f) > 0.002f) {
+                                        workingSize = (workingSize * zoom).coerceIn(12f, 34f)
+                                        val snapped = (workingSize * 2f).roundToInt() / 2f
+                                        if (abs(snapped - lastAppliedSize) >= 0.45f) {
+                                            lastAppliedSize = snapped
+                                            viewModel.updateReaderSettings { it.copy(fontSizeSp = snapped) }
+                                        }
+                                        val zoomPct = ((workingSize / 18f) * 100f).roundToInt()
+                                        pinchZoomHudText = "$zoomPct%  •  ${workingSize.roundToInt()} sp"
+                                        pinchZoomHudToken = System.currentTimeMillis()
+                                    }
+                                }
+                                if (isPinching) {
+                                    event.changes.forEach { it.consume() }
+                                }
+                            } else if (isPinching) {
+                                // Keep consuming while lifting the second finger so tap/scroll doesn't fire at pinch end
+                                event.changes.forEach { it.consume() }
+                            }
+                        }
+                    }
+                }
         ) {
             val density = LocalDensity.current
             val textMeasurer = rememberTextMeasurer()
             val viewportWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
             val verticalPageTurnThresholdPx = with(density) { 56.dp.toPx() }
-            val chapterOverscrollThresholdPx = with(density) { 88.dp.toPx() }
+            val chapterOverscrollThresholdPx = with(density) { 56.dp.toPx() }
 
             // Unified coordinate-based Moon+ Reader tap handler using LIVE window bounds:
             // Left 33% -> Previous page | Center 34% -> Toggle HUD | Right 33% -> Next page
@@ -2845,11 +2920,53 @@ fun ReaderScreen(
                     }
                 }
 
-                // Allow vertical overscroll past bottom/top of a chapter to switch chapters seamlessly
+                // Allow vertical scrolling/overscrolling past bottom/top of a chapter to switch chapters seamlessly
+                // Captures pre-scroll (before Android Stretch OverscrollEffect consumes it), post-scroll, and post-fling
+                val lastChapterSwitchTimeRef = remember { longArrayOf(0L) }
+                val triggerScrollChapterChange: (Int) -> Unit = { delta ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastChapterSwitchTimeRef[0] >= 550L) {
+                        if (delta > 0 && currentChapterIndex < chapters.size - 1) {
+                            lastChapterSwitchTimeRef[0] = now
+                            pendingScrollFraction = 0f
+                            viewModel.nextChapter()
+                        } else if (delta < 0 && currentChapterIndex > 0) {
+                            lastChapterSwitchTimeRef[0] = now
+                            pendingScrollFraction = 1f
+                            viewModel.previousChapter()
+                        }
+                    }
+                }
+                val latestTriggerScrollChapterChange by androidx.compose.runtime.rememberUpdatedState(triggerScrollChapterChange)
+
                 val scrollOverscrollConnection = remember(scrollListState, currentChapterIndex, chapters.size, chapterOverscrollThresholdPx) {
                     object : NestedScrollConnection {
                         private var overscrollAccumY = 0f
-                        private var lastSwitchTimeMs = 0L
+
+                        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                            if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                                val atBottom = !scrollListState.canScrollForward
+                                val atTop = !scrollListState.canScrollBackward
+                                if (available.y < 0f && atBottom && currentChapterIndex < chapters.size - 1) {
+                                    overscrollAccumY += -available.y
+                                    if (overscrollAccumY >= chapterOverscrollThresholdPx) {
+                                        overscrollAccumY = 0f
+                                        latestTriggerScrollChapterChange(1)
+                                        return available
+                                    }
+                                } else if (available.y > 0f && atTop && currentChapterIndex > 0) {
+                                    overscrollAccumY += available.y
+                                    if (overscrollAccumY >= chapterOverscrollThresholdPx) {
+                                        overscrollAccumY = 0f
+                                        latestTriggerScrollChapterChange(-1)
+                                        return available
+                                    }
+                                } else {
+                                    overscrollAccumY = 0f
+                                }
+                            }
+                            return Offset.Zero
+                        }
 
                         override fun onPostScroll(
                             consumed: Offset,
@@ -2857,25 +2974,19 @@ fun ReaderScreen(
                             source: NestedScrollSource
                         ): Offset {
                             if (source == NestedScrollSource.UserInput && available.y != 0f) {
-                                val now = System.currentTimeMillis()
-                                if (now - lastSwitchTimeMs < 500L) return Offset.Zero
                                 val atBottom = !scrollListState.canScrollForward
                                 val atTop = !scrollListState.canScrollBackward
                                 if (available.y < 0f && atBottom && currentChapterIndex < chapters.size - 1) {
                                     overscrollAccumY += -available.y
                                     if (overscrollAccumY >= chapterOverscrollThresholdPx) {
                                         overscrollAccumY = 0f
-                                        lastSwitchTimeMs = now
-                                        pendingScrollFraction = 0f
-                                        viewModel.nextChapter()
+                                        latestTriggerScrollChapterChange(1)
                                     }
                                 } else if (available.y > 0f && atTop && currentChapterIndex > 0) {
                                     overscrollAccumY += available.y
                                     if (overscrollAccumY >= chapterOverscrollThresholdPx) {
                                         overscrollAccumY = 0f
-                                        lastSwitchTimeMs = now
-                                        pendingScrollFraction = 1f
-                                        viewModel.previousChapter()
+                                        latestTriggerScrollChapterChange(-1)
                                     }
                                 }
                             } else if (consumed.y != 0f) {
@@ -2885,19 +2996,79 @@ fun ReaderScreen(
                         }
 
                         override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                            overscrollAccumY = 0f
+                            if (available.y < -320f && !scrollListState.canScrollForward && currentChapterIndex < chapters.size - 1) {
+                                overscrollAccumY = 0f
+                                latestTriggerScrollChapterChange(1)
+                            } else if (available.y > 320f && !scrollListState.canScrollBackward && currentChapterIndex > 0) {
+                                overscrollAccumY = 0f
+                                latestTriggerScrollChapterChange(-1)
+                            } else {
+                                overscrollAccumY = 0f
+                            }
                             return Velocity.Zero
                         }
                     }
                 }
 
                 val scrollCoordsRef = remember { CoordsRef() }
+                val prevChapterTitle = chapters.getOrNull(currentChapterIndex - 1)?.title
+                val nextChapterTitle = chapters.getOrNull(currentChapterIndex + 1)?.title
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .nestedScroll(scrollOverscrollConnection)
                         .onGloballyPositioned { coords ->
                             scrollCoordsRef.coords = coords
+                        }
+                        // Fallback boundary drag detector for short 1-screen chapters and Stretch Overscroll devices
+                        .pointerInput(currentChapterIndex, chapters.size, chapterOverscrollThresholdPx) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+                                val startedAtBottom = !scrollListState.canScrollForward
+                                val startedAtTop = !scrollListState.canScrollBackward
+                                var boundaryPullUp = 0f
+                                var boundaryPullDown = 0f
+                                var totalDx = 0f
+                                var prevPos = down.position
+                                var switched = false
+
+                                while (!switched) {
+                                    val event = awaitPointerEvent(pass = PointerEventPass.Final)
+                                    val pressedCount = event.changes.count { it.pressed }
+                                    if (pressedCount >= 2) break // Yield immediately to 2-finger pinch-to-zoom
+                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) break
+
+                                    val delta = change.position - prevPos
+                                    prevPos = change.position
+                                    totalDx += abs(delta.x)
+
+                                    val atBottomNow = !scrollListState.canScrollForward
+                                    val atTopNow = !scrollListState.canScrollBackward
+
+                                    if (delta.y < 0f && atBottomNow && currentChapterIndex < chapters.size - 1) {
+                                        boundaryPullUp += -delta.y
+                                        boundaryPullDown = 0f
+                                        val needed = if (startedAtBottom) chapterOverscrollThresholdPx else chapterOverscrollThresholdPx * 1.4f
+                                        if (boundaryPullUp >= needed && boundaryPullUp > totalDx * 1.15f) {
+                                            switched = true
+                                            latestTriggerScrollChapterChange(1)
+                                        }
+                                    } else if (delta.y > 0f && atTopNow && currentChapterIndex > 0) {
+                                        boundaryPullDown += delta.y
+                                        boundaryPullUp = 0f
+                                        val needed = if (startedAtTop) chapterOverscrollThresholdPx else chapterOverscrollThresholdPx * 1.4f
+                                        if (boundaryPullDown >= needed && boundaryPullDown > totalDx * 1.15f) {
+                                            switched = true
+                                            latestTriggerScrollChapterChange(-1)
+                                        }
+                                    } else {
+                                        if (!atBottomNow) boundaryPullUp = 0f
+                                        if (!atTopNow) boundaryPullDown = 0f
+                                    }
+                                }
+                            }
                         }
                         .pointerInput(Unit) {
                             detectTapGestures(
@@ -2925,6 +3096,14 @@ fun ReaderScreen(
                         activeTtsParagraphIndex = if ((ttsState.isPlaying || ttsState.isPaused) && ttsState.chapterIndex == currentChapterIndex) ttsState.paragraphIndex else null,
                         highlights = highlights,
                         bookImages = book.bookImages,
+                        previousChapterTitle = prevChapterTitle,
+                        nextChapterTitle = nextChapterTitle,
+                        onPreviousChapter = if (currentChapterIndex > 0) {
+                            { latestTriggerScrollChapterChange(-1) }
+                        } else null,
+                        onNextChapter = if (currentChapterIndex < chapters.size - 1) {
+                            { latestTriggerScrollChapterChange(1) }
+                        } else null,
                         onWordLongPress = { word, line, paragraph, paraIdx, existingHl ->
                             inspectTarget = WordInspectState(
                                 word = word,
@@ -2939,6 +3118,43 @@ fun ReaderScreen(
                         onTapAtWindowX = stableTapAtWindowX,
                         onNavigateToLibrary = onNavigateToLibrary
                     )
+                }
+            }
+
+            // Floating Pinch-to-Zoom Indicator Pill
+            AnimatedVisibility(
+                visible = pinchZoomHudText != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 64.dp)
+                    .zIndex(12f)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = settings.theme.backgroundColor.copy(alpha = 0.94f),
+                    border = BorderStroke(1.dp, settings.theme.accentColor.copy(alpha = 0.4f)),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.testTag("reader_pinch_zoom_hud")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FormatSize,
+                            contentDescription = null,
+                            tint = settings.theme.accentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = pinchZoomHudText.orEmpty(),
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = settings.theme.textColor
+                        )
+                    }
                 }
             }
 

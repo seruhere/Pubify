@@ -159,3 +159,48 @@ fun Modifier.iosTapBounce(
             alpha = alphaState.value
         }
 }
+
+/**
+ * Butter-smooth GPU-composited reveal for popup menus, dropdown sheets, and menu items.
+ * Animates scale (from [initialScale] -> 1f), vertical glide, and alpha strictly inside
+ * `graphicsLayer` with zero measure/layout overhead.
+ */
+fun Modifier.iosMenuReveal(
+    visible: Boolean = true,
+    delayMillis: Int = 0,
+    initialScale: Float = 0.92f,
+    initialOffsetY: Float = -10f
+): Modifier = composed {
+    var revealed by remember(visible) { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(visible, delayMillis) {
+        if (visible) {
+            if (delayMillis > 0) kotlinx.coroutines.delay(delayMillis.toLong())
+            revealed = true
+        } else {
+            revealed = false
+        }
+    }
+    val scaleState = animateFloatAsState(
+        targetValue = if (revealed) 1f else initialScale,
+        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.80f, stiffness = 460f),
+        label = "ios_menu_reveal_scale"
+    )
+    val offsetYState = animateFloatAsState(
+        targetValue = if (revealed) 0f else initialOffsetY,
+        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.84f, stiffness = 440f),
+        label = "ios_menu_reveal_offset"
+    )
+    val alphaState = animateFloatAsState(
+        targetValue = if (revealed) 1f else 0f,
+        animationSpec = IosMotion.silkyTween(durationMillis = 170),
+        label = "ios_menu_reveal_alpha"
+    )
+    this.graphicsLayer {
+        val s = scaleState.value
+        scaleX = s
+        scaleY = s
+        translationY = offsetYState.value
+        alpha = alphaState.value
+        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
+    }
+}

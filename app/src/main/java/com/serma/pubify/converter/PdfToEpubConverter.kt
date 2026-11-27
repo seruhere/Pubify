@@ -11,9 +11,14 @@ import com.tom_roush.pdfbox.pdmodel.DefaultResourceCache
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.graphics.PDXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
+import com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionGoTo
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.destination.PDDestination
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.destination.PDNamedDestination
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.destination.PDPageDestination
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
 import com.tom_roush.pdfbox.rendering.PDFRenderer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -67,9 +72,12 @@ class PdfToEpubConverter(private val context: Context) {
                 return@withContext Result.failure(Exception("Unable to open input stream for selected PDF"))
             }
 
+            coroutineContext.ensureActive()
+
             val resolvedFileSize = if (fileSizeBytes > 0L) fileSizeBytes else tempProbeFile.length()
 
             PDDocument.load(tempProbeFile, MemoryUsageSetting.setupTempFileOnly()).use { document ->
+                coroutineContext.ensureActive()
                 document.resourceCache = LowMemoryResourceCache()
                 val info = document.documentInformation
                 val pageCount = document.numberOfPages
@@ -85,6 +93,8 @@ class PdfToEpubConverter(private val context: Context) {
                     }
                 } catch (_: Throwable) {}
 
+                coroutineContext.ensureActive()
+
                 // Multi-tier title & author resolution: XMP -> PDF Info -> Front Pages (1..10) -> Running Headers -> Outline -> Filename
                 val identity = PdfMetadataExtractor.extract(
                     document = document,
@@ -92,6 +102,8 @@ class PdfToEpubConverter(private val context: Context) {
                     outlineItems = outlineItems,
                     tempDirForExtractor = File(context.cacheDir, "meta_probe")
                 )
+
+                coroutineContext.ensureActive()
 
                 Result.success(
                     PdfMetadata(
@@ -106,6 +118,8 @@ class PdfToEpubConverter(private val context: Context) {
                     )
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             val ex = if (e is Exception) e else Exception(e.message, e)
             Result.failure(ex)
@@ -128,8 +142,11 @@ class PdfToEpubConverter(private val context: Context) {
         var tempPdfFile: File? = null
         val tempImagesDir = File(context.cacheDir, "epub_extract_imgs_${System.currentTimeMillis()}")
         var document: PDDocument? = null
+        var createdOutputEpub: File? = null
+        var completedSuccessfully = false
 
         try {
+            coroutineContext.ensureActive()
             onProgress(
                 ConversionProgress(
                     stage = ConversionStage.INITIALIZING,
@@ -235,6 +252,7 @@ class PdfToEpubConverter(private val context: Context) {
                 } catch (_: Throwable) {
                     emptyList()
                 }
+                coroutineContext.ensureActive()
                 pagesLines[page] = lines
                 pagesImages[page] = try {
                     extractor.extractPageImages(
@@ -246,7 +264,10 @@ class PdfToEpubConverter(private val context: Context) {
                 } catch (_: Throwable) {
                     emptyList()
                 }
+                coroutineContext.ensureActive()
             }
+
+            coroutineContext.ensureActive()
 
             // Resolve final Book Title & Author before closing document if options left them blank/generic
             val sourceFileName = getFileName(uri)
@@ -291,35 +312,39 @@ class PdfToEpubConverter(private val context: Context) {
                 )
             )
 
-            // Normalize PDF bookmark outlines (unwrap Book Title / Part roots & rescue flat 1.1/1.1.1 outlines)
+            // Normalize PDF bookmark outlines (preserving all sibling chapters)
             val normalizedPdfOutlines = PdfStructureExtractor.normalizeOutlineHierarchy(rangeOutlines, totalPages)
-            val pdfChapterCount = normalizedPdfOutlines.count { it.level == 0 }
 
             // Always detect printed TOC pages so TOC rows never create fake chapters,
-            // and use printed TOC entries whenever embedded PDF outlines lack >= 2 chapters
+            // and reconcile embedded PDF bookmarks with the Printed TOC so missing chapters are recovered!
             val printedToc = extractor.extractPrintedToc(pagesLines, totalPages)
-            val resolvedOutlines = if (pdfChapterCount >= 2) {
-                normalizedPdfOutlines
-            } else if (printedToc.items.count { it.level == 0 } >= 2) {
-                printedToc.items
-            } else {
-                normalizedPdfOutlines
-            }
+            val reconciledOutlines = reconcileOutlinesWithPrintedToc(
+                pdfOutlines = normalizedPdfOutlines,
+                printedTocOutlines = printedToc.items
+            )
 
             // Analyze global document structure (margins, body font size, heading tiers, reading order)
             val structure = extractor.buildDocumentStructure(
                 pagesLines = pagesLines,
                 pagesImages = pagesImages,
-                outlineItems = resolvedOutlines,
+                outlineItems = reconciledOutlines,
                 stripHeadersFooters = options.stripHeadersFooters,
                 totalPdfPages = totalPages,
                 tocPages = printedToc.tocPages
             )
 
-            // Assemble chapters matching PDF structure exactly
+            // Final pass: recover any unmistakable explicit in-text chapters ("Chapter 7: ...")
+            // that were missing from BOTH the PDF bookmark tree and the Printed TOC
+            val finalOutlines = reconcileMissingBodyChapters(
+                baseOutlines = reconciledOutlines,
+                blocks = structure.blocks,
+                tocPages = printedToc.tocPages
+            )
+
+            // Assemble chapters matching the full PDF Contents accurately
             val chapters = assembleChapters(
                 blocks = structure.blocks,
-                outlineItems = resolvedOutlines,
+                outlineItems = finalOutlines,
                 options = options,
                 startPage = startPage,
                 endPage = endPage
@@ -333,6 +358,7 @@ class PdfToEpubConverter(private val context: Context) {
             val marginBottom = if (usePdfMargins) structure.detectedMargins.bottomPercent else options.effectiveVerticalMargin
 
             // Packaging EPUB
+            coroutineContext.ensureActive()
             onProgress(
                 ConversionProgress(
                     stage = ConversionStage.PACKAGING_EPUB,
@@ -346,6 +372,9 @@ class PdfToEpubConverter(private val context: Context) {
             val epubDir = File(context.filesDir, "epubs").apply { mkdirs() }
             val sanitizedTitle = finalBookTitle.replace(Regex("[^a-zA-Z0-9_\\-\\.]"), "_").take(40).ifBlank { "Converted_Book" }
             val outputEpub = File(epubDir, "${sanitizedTitle}_${System.currentTimeMillis()}.epub")
+            createdOutputEpub = outputEpub
+
+            coroutineContext.ensureActive()
 
             epubBuilder.buildEpub(
                 outputFile = outputEpub,
@@ -364,6 +393,9 @@ class PdfToEpubConverter(private val context: Context) {
                 marginBottomPercent = marginBottom,
                 images = structure.images
             )
+
+            coroutineContext.ensureActive()
+            completedSuccessfully = true
 
             onProgress(
                 ConversionProgress(
@@ -384,6 +416,8 @@ class PdfToEpubConverter(private val context: Context) {
                     resolvedAuthor = finalBookAuthor
                 )
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             val ex = if (e is Exception) e else Exception(e.message, e)
             onProgress(
@@ -399,6 +433,9 @@ class PdfToEpubConverter(private val context: Context) {
             try {
                 document?.close()
             } catch (_: Throwable) {}
+            if (!completedSuccessfully) {
+                try { createdOutputEpub?.delete() } catch (_: Throwable) {}
+            }
             tempPdfFile?.delete()
             tempImagesDir.deleteRecursively()
         }
@@ -495,28 +532,25 @@ class PdfToEpubConverter(private val context: Context) {
                 }
             }
             ChapterSplitMode.AUTO_DETECT -> {
-                val normalizedOutlines = PdfStructureExtractor.normalizeOutlineHierarchy(outlineItems, (endPage - startPage + 1))
-                val chapterOutlines = normalizedOutlines.filter { it.level == 0 }
-                val subOutlinesByPage = normalizedOutlines
+                // outlineItems are already normalized and reconciled (PDF Bookmarks + Printed TOC + explicit body chapters)
+                val chapterOutlines = outlineItems
+                    .filter { it.level == 0 }
+                    .sortedBy { it.pageNumber }
+                val subOutlinesByPage = outlineItems
                     .filter { it.level >= 1 }
                     .groupBy { it.pageNumber }
                 val hasAuthoritativeOutlines = chapterOutlines.size >= 2
 
-                val topOutlineQueueByPage = chapterOutlines
-                    .groupBy { it.pageNumber }
-                    .mapValues { it.value.toMutableList() }
-                    .toMutableMap()
+                // Chronological FIFO queue of ALL level-0 chapters so even chapters starting on
+                // image-only/empty/skipped pages are NEVER skipped or merged into preceding chapters!
+                val pendingOutlines = ArrayDeque<ExtractedOutlineItem>(chapterOutlines)
 
-                // Pre-check which (page -> outline title) pairs have an exact heading match later on that page
+                // Pre-check which (page -> outline title) pairs have a direct heading match on that page
                 val blocksByPage = blocks.groupBy { it.pageNumber }
                 fun pageHasDirectHeadingMatch(pageNum: Int, item: ExtractedOutlineItem): Boolean {
-                    val normOutline = PdfStructureExtractor.normalizeHeadingComparison(item.title)
-                    if (normOutline.isBlank()) return false
                     return blocksByPage[pageNum].orEmpty().any { b ->
-                        b.type != PdfBlockType.IMAGE && run {
-                            val nb = PdfStructureExtractor.normalizeHeadingComparison(b.text)
-                            nb == normOutline || nb.startsWith(normOutline) || normOutline.startsWith(nb)
-                        }
+                        b.type != PdfBlockType.IMAGE &&
+                            PdfStructureExtractor.titlesMatchFlexible(b.text, item.title)
                     }
                 }
 
@@ -546,10 +580,9 @@ class PdfToEpubConverter(private val context: Context) {
                             else -> PdfBlockType.H4
                         }
                         val existingIdx = mutable.indexOfFirst { b ->
-                            b.pageNumber == sub.pageNumber && b.type != PdfBlockType.IMAGE && run {
-                                val nb = PdfStructureExtractor.normalizeHeadingComparison(b.text)
-                                nb == normSub || nb.startsWith(normSub) || normSub.startsWith(nb)
-                            }
+                            b.pageNumber == sub.pageNumber &&
+                                b.type != PdfBlockType.IMAGE &&
+                                PdfStructureExtractor.titlesMatchFlexible(b.text, sub.title)
                         }
                         if (existingIdx >= 0) {
                             val existing = mutable[existingIdx]
@@ -586,8 +619,18 @@ class PdfToEpubConverter(private val context: Context) {
                     return mutable
                 }
 
-                fun flushChapter(endPg: Int, isFrontMatterSplit: Boolean = false) {
-                    if (currentChapterBlocks.isEmpty()) return
+                fun flushChapter(endPg: Int, isFrontMatterSplit: Boolean = false, allowPlaceholderIfEmpty: Boolean = false) {
+                    if (currentChapterBlocks.isEmpty()) {
+                        if (!allowPlaceholderIfEmpty || currentTitle.isBlank()) return
+                        currentChapterBlocks.add(
+                            StructuredPdfBlock(
+                                pageNumber = currentStartPage,
+                                type = PdfBlockType.PARAGRAPH,
+                                text = currentTitle,
+                                isCentered = true
+                            )
+                        )
+                    }
                     val resolvedTitle = when {
                         currentTitle.isNotBlank() -> currentTitle
                         isFrontMatterSplit -> {
@@ -604,7 +647,7 @@ class PdfToEpubConverter(private val context: Context) {
                     val enrichedBlocks = injectMissingOutlineSubHeadings(
                         chBlocks = currentChapterBlocks,
                         chStartPg = currentStartPage,
-                        chEndPg = endPg
+                        chEndPg = endPg.coerceAtLeast(currentStartPage)
                     )
                     chapters.add(
                         ConvertedChapter(
@@ -612,7 +655,7 @@ class PdfToEpubConverter(private val context: Context) {
                             title = resolvedTitle,
                             htmlContent = formatBlocksToHtml(enrichedBlocks),
                             startPage = currentStartPage,
-                            endPage = endPg
+                            endPage = endPg.coerceAtLeast(currentStartPage)
                         )
                     )
                     chapterIndex++
@@ -620,39 +663,95 @@ class PdfToEpubConverter(private val context: Context) {
                     currentTitle = ""
                 }
 
+                fun openNewChapterFromOutline(outline: ExtractedOutlineItem, splitPage: Int) {
+                    val normNew = PdfStructureExtractor.normalizeHeadingComparison(outline.title)
+                    val normCurr = PdfStructureExtractor.normalizeHeadingComparison(currentTitle)
+                    if (normNew.isNotBlank() && normNew == normCurr && currentChapterBlocks.isEmpty()) {
+                        return
+                    }
+                    if (currentChapterBlocks.isNotEmpty()) {
+                        flushChapter(
+                            endPg = (splitPage - 1).coerceAtLeast(currentStartPage),
+                            isFrontMatterSplit = (currentTitle.isBlank() && chapterIndex == 1)
+                        )
+                    } else if (currentTitle.isNotBlank() && normNew != normCurr) {
+                        // Previous outline sat on a page with no extracted text/images before this chapter began
+                        flushChapter(
+                            endPg = currentStartPage,
+                            isFrontMatterSplit = false,
+                            allowPlaceholderIfEmpty = true
+                        )
+                    }
+                    currentTitle = outline.title
+                    currentStartPage = outline.pageNumber
+                }
+
                 for (block in blocks) {
-                    val pageQueue = topOutlineQueueByPage[block.pageNumber]
-                    var matchedNewTitle: String? = null
+                    var matchedNewOutline: ExtractedOutlineItem? = null
                     var consumeHeadingBlock = false
 
-                    if (pageQueue != null && pageQueue.isNotEmpty()) {
-                        val normBlock = PdfStructureExtractor.normalizeHeadingComparison(block.text)
-                        val matchingIdx = pageQueue.indexOfFirst { outlineItem ->
-                            val normOutline = PdfStructureExtractor.normalizeHeadingComparison(outlineItem.title)
-                            normOutline.isNotBlank() && block.type != PdfBlockType.IMAGE &&
-                                (normBlock == normOutline || normBlock.startsWith(normOutline) || normOutline.startsWith(normBlock))
+                    // 1. Drain ANY pending chapters that started on earlier pages (e.g., blank or image-only divider pages)
+                    while (pendingOutlines.isNotEmpty() && pendingOutlines.first().pageNumber < block.pageNumber) {
+                        val earlierOutline = pendingOutlines.removeFirst()
+                        openNewChapterFromOutline(earlierOutline, splitPage = earlierOutline.pageNumber)
+                    }
+
+                    // 2. Check pending chapters scheduled on THIS page
+                    if (pendingOutlines.isNotEmpty() && pendingOutlines.first().pageNumber == block.pageNumber) {
+                        // Collect indices of all pending outlines on this exact page
+                        var samePageCount = 0
+                        while (samePageCount < pendingOutlines.size &&
+                            pendingOutlines[samePageCount].pageNumber == block.pageNumber
+                        ) {
+                            samePageCount++
                         }
 
-                        if (matchingIdx >= 0) {
-                            matchedNewTitle = pageQueue.removeAt(matchingIdx).title
-                            consumeHeadingBlock = (block.type == PdfBlockType.H1 || block.type == PdfBlockType.H2)
-                        } else if (block.pageNumber != lastHandledPage && !pageHasDirectHeadingMatch(block.pageNumber, pageQueue.first())) {
-                            if (currentChapterBlocks.isNotEmpty()) {
-                                matchedNewTitle = pageQueue.removeAt(0).title
-                                consumeHeadingBlock = false
-                            } else if (currentTitle.isBlank()) {
-                                currentTitle = pageQueue.removeAt(0).title
+                        val matchingPos = if (block.type != PdfBlockType.IMAGE) {
+                            (0 until samePageCount).firstOrNull { pos ->
+                                PdfStructureExtractor.titlesMatchFlexible(block.text, pendingOutlines[pos].title)
+                            } ?: -1
+                        } else -1
+
+                        if (matchingPos >= 0) {
+                            // Open any earlier outlines on the same page that preceded this matched heading
+                            repeat(matchingPos) {
+                                val prior = pendingOutlines.removeFirst()
+                                openNewChapterFromOutline(prior, splitPage = block.pageNumber)
                             }
+                            matchedNewOutline = pendingOutlines.removeFirst()
+                            consumeHeadingBlock = (
+                                block.type == PdfBlockType.H1 ||
+                                    block.type == PdfBlockType.H2 ||
+                                    block.type == PdfBlockType.H3 ||
+                                    (block.type == PdfBlockType.PARAGRAPH && block.text.length <= 130)
+                                )
+                        } else if (block.pageNumber != lastHandledPage &&
+                            !pageHasDirectHeadingMatch(block.pageNumber, pendingOutlines.first())
+                        ) {
+                            matchedNewOutline = pendingOutlines.removeFirst()
+                            consumeHeadingBlock = false
                         }
                     }
 
                     lastHandledPage = block.pageNumber
 
-                    // ONLY split on H1 blocks when we do NOT have authoritative PDF/TOC outlines.
-                    // When outlines exist, chapters match the exact outline count and extra headings stay Topics (H2).
-                    if (!hasAuthoritativeOutlines && matchedNewTitle == null && block.type == PdfBlockType.H1) {
-                        if (currentChapterBlocks.isEmpty() && currentTitle.isBlank()) {
+                    if (matchedNewOutline != null) {
+                        val normNew = PdfStructureExtractor.normalizeHeadingComparison(matchedNewOutline.title)
+                        val normCurr = PdfStructureExtractor.normalizeHeadingComparison(currentTitle)
+                        if (normNew.isNotBlank() && normNew == normCurr && currentChapterBlocks.isEmpty()) {
+                            // Repeated running header matching already-open empty chapter
+                        } else {
+                            openNewChapterFromOutline(matchedNewOutline, splitPage = block.pageNumber)
+                        }
+                    } else if (!hasAuthoritativeOutlines && block.type == PdfBlockType.H1) {
+                        // ONLY split purely on H1 blocks when we do NOT have authoritative outlines/TOC
+                        val normNew = PdfStructureExtractor.normalizeHeadingComparison(block.text)
+                        val normCurr = PdfStructureExtractor.normalizeHeadingComparison(currentTitle)
+                        if (normNew.isNotBlank() && normNew == normCurr) {
+                            consumeHeadingBlock = true
+                        } else if (currentChapterBlocks.isEmpty() && currentTitle.isBlank()) {
                             currentTitle = block.text
+                            currentStartPage = block.pageNumber
                             consumeHeadingBlock = true
                         } else if (currentChapterBlocks.isNotEmpty()) {
                             val hasContentInCurrent = currentChapterBlocks.any {
@@ -660,27 +759,14 @@ class PdfToEpubConverter(private val context: Context) {
                                     it.type == PdfBlockType.LIST_ITEM || it.type == PdfBlockType.BLOCKQUOTE
                             }
                             if (hasContentInCurrent) {
-                                matchedNewTitle = block.text
-                                consumeHeadingBlock = true
-                            }
-                        }
-                    }
-
-                    if (matchedNewTitle != null) {
-                        val normNew = PdfStructureExtractor.normalizeHeadingComparison(matchedNewTitle)
-                        val normCurr = PdfStructureExtractor.normalizeHeadingComparison(currentTitle)
-                        if (normNew.isNotBlank() && normNew == normCurr) {
-                            // Ignore repeated running header matching the currently active chapter title
-                            consumeHeadingBlock = true
-                        } else {
-                            if (currentChapterBlocks.isNotEmpty()) {
                                 flushChapter(
                                     endPg = block.pageNumber.coerceAtLeast(currentStartPage),
                                     isFrontMatterSplit = (currentTitle.isBlank() && chapterIndex == 1)
                                 )
+                                currentTitle = block.text
+                                currentStartPage = block.pageNumber
+                                consumeHeadingBlock = true
                             }
-                            currentTitle = matchedNewTitle
-                            currentStartPage = block.pageNumber
                         }
                     }
 
@@ -695,14 +781,127 @@ class PdfToEpubConverter(private val context: Context) {
                     }
                 }
 
-                // Flush final chapter
+                // Flush active chapter
                 if (currentChapterBlocks.isNotEmpty() || chapters.isEmpty()) {
                     flushChapter(endPg = endPage)
+                }
+
+                // If any trailing outlines existed on final pages with no extracted blocks (e.g., end-matter art), preserve them cleanly
+                while (pendingOutlines.isNotEmpty()) {
+                    val trailing = pendingOutlines.removeFirst()
+                    val alreadyPresent = chapters.any {
+                        PdfStructureExtractor.titlesMatchFlexible(it.title, trailing.title)
+                    }
+                    if (!alreadyPresent) {
+                        currentTitle = trailing.title
+                        currentStartPage = trailing.pageNumber
+                        flushChapter(endPg = trailing.pageNumber, allowPlaceholderIfEmpty = true)
+                    }
                 }
             }
         }
 
         return chapters
+    }
+
+    /**
+     * Reconciles embedded PDF bookmark outlines with parsed Printed TOC entries so that
+     * incomplete PDF bookmarks never cause missing chapters in the final EPUB Contents.
+     */
+    private fun reconcileOutlinesWithPrintedToc(
+        pdfOutlines: List<ExtractedOutlineItem>,
+        printedTocOutlines: List<ExtractedOutlineItem>
+    ): List<ExtractedOutlineItem> {
+        val pdfChapters = pdfOutlines.filter { it.level == 0 }
+        val tocChapters = printedTocOutlines.filter { it.level == 0 }
+
+        if (pdfChapters.size < 2 && tocChapters.size >= 2) return printedTocOutlines
+        if (tocChapters.size < 2) return pdfOutlines
+
+        // Choose the richer source as primary and merge any missing level-0 chapters from the other
+        val useTocAsPrimary = tocChapters.size > pdfChapters.size + 1 ||
+            (tocChapters.size > pdfChapters.size && pdfChapters.size <= 5)
+
+        val primary = if (useTocAsPrimary) printedTocOutlines else pdfOutlines
+        val secondary = if (useTocAsPrimary) pdfOutlines else printedTocOutlines
+
+        val merged = primary.toMutableList()
+        val primaryChapters = primary.filter { it.level == 0 }
+
+        for (candidate in secondary) {
+            if (candidate.level != 0) continue
+            // Skip generic "Cover" / "Contents" / "Title Page" duplicates when merging secondary
+            val normCand = PdfStructureExtractor.normalizeHeadingComparison(candidate.title)
+            if (normCand.isBlank()) continue
+            val isDuplicate = primaryChapters.any { existing ->
+                PdfStructureExtractor.titlesMatchFlexible(existing.title, candidate.title) ||
+                    (existing.pageNumber == candidate.pageNumber &&
+                        PdfStructureExtractor.stripChapterNumberPrefix(existing.title) ==
+                        PdfStructureExtractor.stripChapterNumberPrefix(candidate.title))
+            }
+            if (!isDuplicate) {
+                merged.add(candidate)
+            }
+        }
+
+        // Preserve hierarchical ordering while keeping all chapters in strict page order
+        return merged.sortedWith(compareBy<ExtractedOutlineItem> { it.pageNumber }.thenBy { it.level })
+    }
+
+    /**
+     * Scans structured body blocks for unmistakable explicit chapter headings ("Chapter 8",
+     * "Part III", "Appendix A", "Epilogue", etc.) that were absent from both PDF bookmarks
+     * and the Printed TOC, adding them so no chapter gets silently swallowed into the previous one.
+     */
+    private fun reconcileMissingBodyChapters(
+        baseOutlines: List<ExtractedOutlineItem>,
+        blocks: List<StructuredPdfBlock>,
+        tocPages: Set<Int>
+    ): List<ExtractedOutlineItem> {
+        val existingChapters = baseOutlines.filter { it.level == 0 }
+        val numberedChapterRegex = Regex("^\\d{1,2}\\.?\\s+[A-Z]\\S.*")
+        val bookUsesNumberedChapters = existingChapters.count {
+            numberedChapterRegex.matches(it.title.trim())
+        } >= 2
+        val merged = baseOutlines.toMutableList()
+        val addedChapters = mutableListOf<ExtractedOutlineItem>()
+
+        for (block in blocks) {
+            if (block.pageNumber in tocPages) continue
+            if (block.type != PdfBlockType.H1 && block.type != PdfBlockType.H2) continue
+            val text = block.text.trim()
+            if (text.length !in 3..120) continue
+            val isExplicit = PdfStructureExtractor.isExplicitChapterHeading(text)
+            val isNumberedH1 = bookUsesNumberedChapters &&
+                block.type == PdfBlockType.H1 &&
+                numberedChapterRegex.matches(text)
+            if (!isExplicit && !isNumberedH1) continue
+
+            // Avoid splitting on generic repeated section titles like "Notes" or "References" if already well-covered
+            val allKnown = existingChapters + addedChapters
+            val alreadyCovered = allKnown.any { existing ->
+                PdfStructureExtractor.titlesMatchFlexible(existing.title, text) ||
+                    (kotlin.math.abs(existing.pageNumber - block.pageNumber) <= 1 &&
+                        (existing.pageNumber == block.pageNumber ||
+                            PdfStructureExtractor.stripChapterNumberPrefix(existing.title) ==
+                            PdfStructureExtractor.stripChapterNumberPrefix(text)))
+            }
+            if (!alreadyCovered) {
+                val item = ExtractedOutlineItem(
+                    title = text,
+                    pageNumber = block.pageNumber,
+                    level = 0
+                )
+                merged.add(item)
+                addedChapters.add(item)
+            }
+        }
+
+        return if (addedChapters.isEmpty()) {
+            baseOutlines
+        } else {
+            merged.sortedWith(compareBy<ExtractedOutlineItem> { it.pageNumber }.thenBy { it.level })
+        }
     }
 
     private fun formatBlocksToHtml(blocks: List<StructuredPdfBlock>): String {
@@ -839,6 +1038,59 @@ class PdfToEpubConverter(private val context: Context) {
         }
     }
 
+    /**
+     * Resolves the 1-based PDF page number for a bookmark outline item across all PDF destination formats:
+     * direct PDPage references, PDActionGoTo actions, PDNamedDestination catalog lookups, and
+     * 0-based page-index PDPageDestination objects.
+     */
+    private fun resolveOutlinePageNumber(item: PDOutlineItem, document: PDDocument): Int {
+        // 1. Standard PDFBox helper
+        try {
+            val destPage = item.findDestinationPage(document)
+            if (destPage != null) {
+                val idx = document.pages.indexOf(destPage)
+                if (idx >= 0) return idx + 1
+            }
+        } catch (_: Throwable) {}
+
+        // 2. Inspect explicit Destination or GoTo Action
+        val destinations = mutableListOf<PDDestination>()
+        try {
+            item.destination?.let { destinations.add(it) }
+        } catch (_: Throwable) {}
+        try {
+            val action = item.action
+            if (action is PDActionGoTo) {
+                action.destination?.let { destinations.add(it) }
+            }
+        } catch (_: Throwable) {}
+
+        for (rawDest in destinations) {
+            try {
+                val resolvedDest: PDDestination? = if (rawDest is PDNamedDestination) {
+                    document.documentCatalog.findNamedDestinationPage(rawDest)
+                } else {
+                    rawDest
+                }
+                if (resolvedDest is PDPageDestination) {
+                    resolvedDest.page?.let { page ->
+                        val idx = document.pages.indexOf(page)
+                        if (idx >= 0) return idx + 1
+                    }
+                    val retrievedZeroBased = resolvedDest.retrievePageNumber()
+                    if (retrievedZeroBased in 0 until document.numberOfPages) {
+                        return retrievedZeroBased + 1
+                    }
+                    val rawZeroBased = resolvedDest.pageNumber
+                    if (rawZeroBased in 0 until document.numberOfPages) {
+                        return rawZeroBased + 1
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+        return -1
+    }
+
     private fun extractOutlineBookmarks(
         node: PDOutlineNode,
         document: PDDocument,
@@ -851,18 +1103,29 @@ class PdfToEpubConverter(private val context: Context) {
         var current: PDOutlineItem? = node.firstChild
         while (current != null && results.size < maxItems) {
             if (!visited.add(current)) break
-            try {
-                val title = current.title
-                val destPage = current.findDestinationPage(document)
-                if (destPage != null) {
-                    val pageNumber = document.pages.indexOf(destPage) + 1
-                    if (pageNumber > 0 && !title.isNullOrBlank()) {
-                        results.add(ExtractedOutlineItem(title.trim(), pageNumber, level))
+            val title = try {
+                current.title?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+            } catch (_: Throwable) {
+                ""
+            }
+            val directPage = resolveOutlinePageNumber(current, document)
+
+            if (directPage > 0 && title.isNotBlank()) {
+                results.add(ExtractedOutlineItem(title, directPage, level))
+                if (current.hasChildren() && results.size < maxItems) {
+                    extractOutlineBookmarks(current, document, results, level + 1, visited, maxItems)
+                }
+            } else if (current.hasChildren() && results.size < maxItems) {
+                // Container bookmark (e.g., Chapter or Part folder with no direct destination of its own):
+                // extract children first and inherit the first child's page number so it's never dropped!
+                val insertIndex = results.size
+                extractOutlineBookmarks(current, document, results, level + 1, visited, maxItems)
+                if (title.isNotBlank() && results.size > insertIndex) {
+                    val inheritedPage = results[insertIndex].pageNumber
+                    if (inheritedPage > 0) {
+                        results.add(insertIndex, ExtractedOutlineItem(title, inheritedPage, level))
                     }
                 }
-            } catch (_: Throwable) {}
-            if (current.hasChildren() && results.size < maxItems) {
-                extractOutlineBookmarks(current, document, results, level + 1, visited, maxItems)
             }
             current = current.nextSibling
         }

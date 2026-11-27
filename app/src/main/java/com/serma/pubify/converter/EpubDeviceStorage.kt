@@ -1,15 +1,36 @@
 package com.serma.pubify.converter
 
+import android.Manifest
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
+import androidx.core.content.ContextCompat
 import com.serma.pubify.R
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+
+enum class DeviceStorageMode {
+    UNSET,
+    SAF_FOLDER,
+    SCOPED_DOWNLOADS,
+    APP_ONLY
+}
+
+data class StoragePermissionStatus(
+    val mode: DeviceStorageMode,
+    val isConfigured: Boolean,
+    val hasSharedStorageAccess: Boolean,
+    val isLegacyRuntimePermissionRequired: Boolean,
+    val displayLocation: String,
+    val treeUri: Uri? = null
+)
 
 data class SavedDeviceFileResult(
     val savedSuccessfully: Boolean,
@@ -20,19 +41,32 @@ data class SavedDeviceFileResult(
 )
 
 /**
- * Automatically creates a device folder named after the app (e.g. "Downloads/PDF to EPUB Converter/")
- * and stores every converted EPUB file inside it using zero-permission MediaStore on Android 10+ (API 29+)
- * and public Downloads / external Downloads fallback on older APIs.
+ * Manages user-authorized storage permission and saves converted EPUB files to:
+ * 1. A user-granted Storage Access Framework (SAF) folder on Android 10+ (API 29+) via
+ *    `ActivityResultContracts.OpenDocumentTree` + `takePersistableUriPermission`,
+ * 2. User-confirmed Scoped Storage `Downloads/<AppName>/` via `MediaStore.Downloads`,
+ * 3. Public `Downloads/<AppName>/` on Android 7–9 (API 24–28) after runtime `WRITE_EXTERNAL_STORAGE` grant,
+ * 4. Or strictly inside private app library storage if the user declines shared device storage access.
  */
 object EpubDeviceStorage {
 
+    private const val PREFS_NAME = "reader_app_prefs"
+    private const val KEY_STORAGE_MODE = "device_storage_mode"
+    private const val KEY_SAF_TREE_URI = "device_saf_tree_uri"
     private const val FALLBACK_FOLDER_NAME = "Pubify"
     private const val EPUB_MIME = "application/epub+zip"
 
-    /**
-     * Resolves the folder name directly from the application's display name (`R.string.app_name`),
-     * sanitized for filesystem compatibility across Android devices.
-     */
+    fun isLegacyWritePermissionRequired(): Boolean =
+        Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+
+    fun hasLegacyWritePermission(context: Context): Boolean {
+        if (!isLegacyWritePermissionRequired()) return true
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     fun getAppFolderName(context: Context): String {
         val rawName = try {
             context.getString(R.string.app_name)
@@ -46,41 +80,143 @@ object EpubDeviceStorage {
             .ifBlank { FALLBACK_FOLDER_NAME }
     }
 
-    /**
-     * Proactively creates the app-named output directory on device storage when direct directory
-     * creation is allowed (pre-API 29 public Downloads and app external Downloads directory).
-     * On API 29+, MediaStore.Downloads also automatically creates "Downloads/<AppName>/" on first write.
-     */
-    @Suppress("DEPRECATION")
-    fun ensureAppFolderExists(context: Context): File? {
-        val folderName = getAppFolderName(context)
-        val candidates = buildList {
-            try {
-                val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (publicDownloads != null) {
-                    add(File(publicDownloads, folderName))
-                }
-            } catch (_: Throwable) {}
-            try {
-                val appExternalDownloads = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                if (appExternalDownloads != null) {
-                    add(File(appExternalDownloads, folderName))
-                }
-            } catch (_: Throwable) {}
+    fun getPersistedOutputTreeUri(context: Context): Uri? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_SAF_TREE_URI, null)?.trim()
+        if (raw.isNullOrBlank()) return null
+        val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return null
+        val hasPersistedGrant = try {
+            context.contentResolver.persistedUriPermissions.any {
+                it.uri == uri && it.isWritePermission
+            }
+        } catch (_: Throwable) {
+            false
+        }
+        return if (hasPersistedGrant) uri else null
+    }
+
+    fun savePersistedOutputTreeUri(context: Context, treeUri: Uri): Boolean {
+        return try {
+            val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_SAF_TREE_URI, treeUri.toString())
+                .putString(KEY_STORAGE_MODE, DeviceStorageMode.SAF_FOLDER.name)
+                .apply()
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun confirmScopedDownloadsAccess(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_SAF_TREE_URI)
+            .putString(KEY_STORAGE_MODE, DeviceStorageMode.SCOPED_DOWNLOADS.name)
+            .apply()
+    }
+
+    fun setAppOnlyStorageMode(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_SAF_TREE_URI)
+            .putString(KEY_STORAGE_MODE, DeviceStorageMode.APP_ONLY.name)
+            .apply()
+    }
+
+    fun getStoragePermissionStatus(context: Context): StoragePermissionStatus {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val savedMode = runCatching {
+            DeviceStorageMode.valueOf(prefs.getString(KEY_STORAGE_MODE, DeviceStorageMode.UNSET.name) ?: DeviceStorageMode.UNSET.name)
+        }.getOrDefault(DeviceStorageMode.UNSET)
+        val appFolderName = getAppFolderName(context)
+
+        if (isLegacyWritePermissionRequired()) {
+            val legacyGranted = hasLegacyWritePermission(context)
+            return when {
+                legacyGranted -> StoragePermissionStatus(
+                    mode = DeviceStorageMode.SCOPED_DOWNLOADS,
+                    isConfigured = true,
+                    hasSharedStorageAccess = true,
+                    isLegacyRuntimePermissionRequired = true,
+                    displayLocation = "Downloads/$appFolderName"
+                )
+                savedMode == DeviceStorageMode.APP_ONLY -> StoragePermissionStatus(
+                    mode = DeviceStorageMode.APP_ONLY,
+                    isConfigured = true,
+                    hasSharedStorageAccess = false,
+                    isLegacyRuntimePermissionRequired = true,
+                    displayLocation = "App Private Library Only"
+                )
+                else -> StoragePermissionStatus(
+                    mode = DeviceStorageMode.UNSET,
+                    isConfigured = false,
+                    hasSharedStorageAccess = false,
+                    isLegacyRuntimePermissionRequired = true,
+                    displayLocation = "Permission Not Granted"
+                )
+            }
         }
 
-        var createdDir: File? = null
-        for (dir in candidates) {
-            try {
-                if (!dir.exists()) {
-                    dir.mkdirs()
-                }
-                if (dir.exists() && dir.isDirectory && createdDir == null) {
-                    createdDir = dir
-                }
-            } catch (_: Throwable) {}
+        // Android 10+ (API 29+)
+        val safUri = getPersistedOutputTreeUri(context)
+        if (safUri != null) {
+            return StoragePermissionStatus(
+                mode = DeviceStorageMode.SAF_FOLDER,
+                isConfigured = true,
+                hasSharedStorageAccess = true,
+                isLegacyRuntimePermissionRequired = false,
+                displayLocation = formatTreeUriDisplayPath(safUri),
+                treeUri = safUri
+            )
         }
-        return createdDir
+
+        return when (savedMode) {
+            DeviceStorageMode.SCOPED_DOWNLOADS -> StoragePermissionStatus(
+                mode = DeviceStorageMode.SCOPED_DOWNLOADS,
+                isConfigured = true,
+                hasSharedStorageAccess = true,
+                isLegacyRuntimePermissionRequired = false,
+                displayLocation = "Downloads/$appFolderName"
+            )
+            DeviceStorageMode.APP_ONLY -> StoragePermissionStatus(
+                mode = DeviceStorageMode.APP_ONLY,
+                isConfigured = true,
+                hasSharedStorageAccess = false,
+                isLegacyRuntimePermissionRequired = false,
+                displayLocation = "App Private Library Only"
+            )
+            else -> StoragePermissionStatus(
+                mode = DeviceStorageMode.UNSET,
+                isConfigured = false,
+                hasSharedStorageAccess = false,
+                isLegacyRuntimePermissionRequired = false,
+                displayLocation = "Permission Not Granted"
+            )
+        }
+    }
+
+    fun formatTreeUriDisplayPath(treeUri: Uri): String {
+        return try {
+            val docId = DocumentsContract.getTreeDocumentId(treeUri).orEmpty()
+            when {
+                docId.startsWith("primary:", ignoreCase = true) -> {
+                    val subPath = docId.substringAfter(":").trim('/')
+                    if (subPath.isBlank()) "Internal Storage" else subPath
+                }
+                docId.contains(":") -> {
+                    val subPath = docId.substringAfter(":").trim('/')
+                    if (subPath.isBlank()) "External Storage" else "SD Card/$subPath"
+                }
+                docId.isNotBlank() -> docId
+                else -> "Selected Folder"
+            }
+        } catch (_: Throwable) {
+            "Selected Folder"
+        }
     }
 
     fun saveEpubToDeviceDownloads(
@@ -95,8 +231,16 @@ object EpubDeviceStorage {
             )
         }
 
-        val appFolderName = getAppFolderName(context)
+        val status = getStoragePermissionStatus(context)
+        if (!status.hasSharedStorageAccess) {
+            return SavedDeviceFileResult(
+                savedSuccessfully = false,
+                displayPath = null,
+                errorMessage = "Saved in private app library only (device storage permission not granted)"
+            )
+        }
 
+        val appFolderName = getAppFolderName(context)
         val cleanBaseName = bookTitle
             .trim()
             .replace(Regex("[^a-zA-Z0-9._\\- ]"), "")
@@ -110,6 +254,21 @@ object EpubDeviceStorage {
             "$cleanBaseName.epub"
         }
 
+        // 1. User-granted Storage Access Framework (SAF) folder takes priority
+        val safUri = status.treeUri
+        if (safUri != null) {
+            val safResult = saveViaSafTreeUri(
+                context = context,
+                treeUri = safUri,
+                sourceEpubFile = sourceEpubFile,
+                fileName = targetFileName
+            )
+            if (safResult.savedSuccessfully) {
+                return safResult
+            }
+        }
+
+        // 2. Scoped Storage MediaStore.Downloads on Android 10+ (API 29+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val mediaStoreResult = saveViaMediaStoreDownloads(
                 context = context,
@@ -122,12 +281,62 @@ object EpubDeviceStorage {
             }
         }
 
-        return saveViaLegacyOrExternalDownloads(
+        // 3. Legacy public Downloads on Android 7–9 (requires WRITE_EXTERNAL_STORAGE)
+        return saveViaLegacyDownloads(
             context = context,
             sourceEpubFile = sourceEpubFile,
             fileName = targetFileName,
             appFolderName = appFolderName
         )
+    }
+
+    private fun saveViaSafTreeUri(
+        context: Context,
+        treeUri: Uri,
+        sourceEpubFile: File,
+        fileName: String
+    ): SavedDeviceFileResult {
+        return try {
+            val resolver = context.contentResolver
+            val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+            val parentDocumentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)
+            val createdUri = DocumentsContract.createDocument(
+                resolver,
+                parentDocumentUri,
+                EPUB_MIME,
+                fileName
+            ) ?: return SavedDeviceFileResult(
+                savedSuccessfully = false,
+                errorMessage = "Could not create file in selected folder"
+            )
+
+            try {
+                resolver.openOutputStream(createdUri)?.use { out ->
+                    FileInputStream(sourceEpubFile).use { input ->
+                        input.copyTo(out)
+                    }
+                } ?: throw IllegalStateException("Unable to open output stream in selected folder")
+
+                val folderLabel = formatTreeUriDisplayPath(treeUri)
+                SavedDeviceFileResult(
+                    savedSuccessfully = true,
+                    displayPath = "$folderLabel/$fileName",
+                    contentUri = createdUri,
+                    folderName = folderLabel
+                )
+            } catch (e: Throwable) {
+                runCatching { DocumentsContract.deleteDocument(resolver, createdUri) }
+                SavedDeviceFileResult(
+                    savedSuccessfully = false,
+                    errorMessage = e.localizedMessage ?: "Failed writing to selected folder"
+                )
+            }
+        } catch (e: Throwable) {
+            SavedDeviceFileResult(
+                savedSuccessfully = false,
+                errorMessage = e.localizedMessage ?: "Selected folder unavailable"
+            )
+        }
     }
 
     private fun saveViaMediaStoreDownloads(
@@ -195,61 +404,66 @@ object EpubDeviceStorage {
     }
 
     @Suppress("DEPRECATION")
-    private fun saveViaLegacyOrExternalDownloads(
+    private fun saveViaLegacyDownloads(
         context: Context,
         sourceEpubFile: File,
         fileName: String,
         appFolderName: String
     ): SavedDeviceFileResult {
-        val candidateDirs = buildList {
-            try {
-                val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (publicDownloads != null) {
-                    add(File(publicDownloads, appFolderName) to "Downloads/$appFolderName")
-                }
-            } catch (_: Throwable) {}
-            try {
-                val appExternalDownloads = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                if (appExternalDownloads != null) {
-                    add(File(appExternalDownloads, appFolderName) to "Android/data/${context.packageName}/files/Download/$appFolderName")
-                }
-            } catch (_: Throwable) {}
+        if (!hasLegacyWritePermission(context)) {
+            return SavedDeviceFileResult(
+                savedSuccessfully = false,
+                folderName = appFolderName,
+                errorMessage = "Storage permission not granted"
+            )
         }
 
-        for ((dir, displayPrefix) in candidateDirs) {
-            try {
-                if (!dir.exists()) {
-                    dir.mkdirs()
-                }
-                if (dir.exists() && dir.canWrite()) {
-                    var targetFile = File(dir, fileName)
-                    if (targetFile.exists()) {
-                        val base = fileName.removeSuffix(".epub")
-                        targetFile = File(dir, "${base}_${System.currentTimeMillis() % 10000}.epub")
-                    }
-                    FileInputStream(sourceEpubFile).use { input ->
-                        FileOutputStream(targetFile).use { out ->
-                            input.copyTo(out)
-                        }
-                    }
-                    if (targetFile.exists() && targetFile.length() > 0L) {
-                        return SavedDeviceFileResult(
-                            savedSuccessfully = true,
-                            displayPath = "$displayPrefix/${targetFile.name}",
-                            contentUri = Uri.fromFile(targetFile),
-                            folderName = appFolderName
-                        )
-                    }
-                }
-            } catch (_: Throwable) {
-                // Fall through to next candidate directory
-            }
-        }
-
-        return SavedDeviceFileResult(
+        val publicDownloads = try {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        } catch (_: Throwable) {
+            null
+        } ?: return SavedDeviceFileResult(
             savedSuccessfully = false,
             folderName = appFolderName,
-            errorMessage = "Could not write EPUB to device folder $appFolderName"
+            errorMessage = "Downloads directory unavailable"
         )
+
+        val dir = File(publicDownloads, appFolderName)
+        return try {
+            if (!dir.exists()) {
+                dir.mkdirs()
+            }
+            if (dir.exists() && dir.canWrite()) {
+                var targetFile = File(dir, fileName)
+                if (targetFile.exists()) {
+                    val base = fileName.removeSuffix(".epub")
+                    targetFile = File(dir, "${base}_${System.currentTimeMillis() % 10000}.epub")
+                }
+                FileInputStream(sourceEpubFile).use { input ->
+                    FileOutputStream(targetFile).use { out ->
+                        input.copyTo(out)
+                    }
+                }
+                if (targetFile.exists() && targetFile.length() > 0L) {
+                    return SavedDeviceFileResult(
+                        savedSuccessfully = true,
+                        displayPath = "Downloads/$appFolderName/${targetFile.name}",
+                        contentUri = Uri.fromFile(targetFile),
+                        folderName = appFolderName
+                    )
+                }
+            }
+            SavedDeviceFileResult(
+                savedSuccessfully = false,
+                folderName = appFolderName,
+                errorMessage = "Could not write EPUB to Downloads/$appFolderName"
+            )
+        } catch (e: Throwable) {
+            SavedDeviceFileResult(
+                savedSuccessfully = false,
+                folderName = appFolderName,
+                errorMessage = e.localizedMessage ?: "Could not write EPUB to device storage"
+            )
+        }
     }
 }

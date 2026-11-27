@@ -550,8 +550,13 @@ class PdfStructureExtractor(
     }
 
     /**
-     * Parses printed "Table of Contents" / "Contents" pages and resolves exact PDF page numbers
-     * plus hierarchical Chapter (level 0), Topic (level 1), and Sub-topic (level 2) structure.
+     * Parses printed "Table of Contents" / "Contents" pages with high accuracy:
+     * - Scans up to 35 front pages and detects standard & spaced TOC headers
+     * - Merges same-Y split text fragments (e.g., left-aligned title + right-aligned page number)
+     * - Joins 2-line wrapped TOC entries ("Chapter 3" + "The Title ... 45")
+     * - Supports Arabic & Roman numeral printed page numbers
+     * - Calibrates exact PDF page offsets via consensus heading matching (including 2-line PDF headings)
+     *   with a footer/header printed-page-number fallback so no chapters are dropped.
      */
     fun extractPrintedToc(
         pagesLines: Map<Int, List<ExtractedPdfLine>>,
@@ -559,21 +564,104 @@ class PdfStructureExtractor(
     ): PrintedTocResult {
         if (pagesLines.size < 3) return PrintedTocResult()
         val sortedPages = pagesLines.keys.sorted()
-        val frontSearchPages = sortedPages.take(25)
+        val frontSearchPages = sortedPages.take(35)
+
+        fun isTocHeaderText(raw: String): Boolean {
+            val cleaned = raw.trim().trimEnd(':', '.', '—', '-', ' ')
+            if (cleaned.isEmpty() || cleaned.length > 42) return false
+            val collapsed = cleaned.replace(Regex("\\s+"), " ")
+            val squeezed = cleaned.replace(Regex("\\s+"), "")
+            return collapsed.equals("Contents", ignoreCase = true) ||
+                collapsed.equals("Table of Contents", ignoreCase = true) ||
+                collapsed.equals("Brief Contents", ignoreCase = true) ||
+                collapsed.equals("Detailed Contents", ignoreCase = true) ||
+                collapsed.equals("Full Contents", ignoreCase = true) ||
+                collapsed.equals("Summary Contents", ignoreCase = true) ||
+                collapsed.equals("Chapters", ignoreCase = true) ||
+                collapsed.equals("List of Chapters", ignoreCase = true) ||
+                collapsed.equals("In This Book", ignoreCase = true) ||
+                squeezed.equals("CONTENTS", ignoreCase = true) ||
+                squeezed.equals("TABLEOFCONTENTS", ignoreCase = true)
+        }
+
+        // Merge lines sharing the same horizontal baseline on a page (common when page numbers
+        // are right-aligned in a separate PDF text run from the chapter title).
+        fun mergeSameBaselineLines(rawLines: List<ExtractedPdfLine>): List<ExtractedPdfLine> {
+            if (rawLines.size <= 1) return rawLines
+            val sorted = rawLines.sortedWith(compareBy<ExtractedPdfLine> { it.topY }.thenBy { it.leftX })
+            val merged = mutableListOf<ExtractedPdfLine>()
+            var currentGroup = mutableListOf(sorted.first())
+
+            fun flushGroup() {
+                if (currentGroup.size == 1) {
+                    merged.add(currentGroup.first())
+                } else {
+                    val byX = currentGroup.sortedBy { it.leftX }
+                    val sb = StringBuilder()
+                    var prevRight = byX.first().rightX
+                    for ((i, seg) in byX.withIndex()) {
+                        val t = seg.text.trim()
+                        if (t.isEmpty()) continue
+                        if (sb.isNotEmpty()) {
+                            val gap = seg.leftX - prevRight
+                            if (gap > maxOf(seg.fontSizePt * 1.4f, 16f)) {
+                                sb.append("   ")
+                            } else {
+                                sb.append(' ')
+                            }
+                        }
+                        sb.append(t)
+                        prevRight = maxOf(prevRight, seg.rightX)
+                    }
+                    val first = byX.first()
+                    merged.add(
+                        first.copy(
+                            text = sb.toString().trim(),
+                            leftX = byX.minOf { it.leftX },
+                            rightX = byX.maxOf { it.rightX },
+                            topY = byX.map { it.topY }.average().toFloat(),
+                            fontSizePt = byX.maxOf { it.fontSizePt },
+                            isBold = byX.first().isBold
+                        )
+                    )
+                }
+                currentGroup = mutableListOf()
+            }
+
+            for (i in 1 until sorted.size) {
+                val line = sorted[i]
+                val ref = currentGroup.first()
+                val tol = maxOf(ref.fontSizePt, line.fontSizePt, 8f) * 0.55f
+                if (abs(line.topY - ref.topY) <= tol) {
+                    currentGroup.add(line)
+                } else {
+                    flushGroup()
+                    currentGroup.add(line)
+                }
+            }
+            if (currentGroup.isNotEmpty()) flushGroup()
+            return merged
+        }
 
         var tocStartPage = -1
         for (pg in frontSearchPages) {
-            val lines = pagesLines[pg].orEmpty()
-            val hasTocHeader = lines.any { line ->
-                val t = line.text.trim()
-                t.equals("Contents", ignoreCase = true) ||
-                    t.equals("Table of Contents", ignoreCase = true) ||
-                    t.equals("Brief Contents", ignoreCase = true) ||
-                    t.equals("Detailed Contents", ignoreCase = true)
-            }
-            if (hasTocHeader) {
+            val lines = mergeSameBaselineLines(pagesLines[pg].orEmpty())
+            if (lines.any { isTocHeaderText(it.text) }) {
                 tocStartPage = pg
                 break
+            }
+        }
+        // Fallback: if no explicit "Contents" header word exists (e.g., stylized graphic header),
+        // detect a front page containing >= 4 dotted/wide-spaced TOC rows.
+        val tocDottedOrWideRegex = Regex("""^(.+?)\s*(?:\.{2,}|·{2,}|…+|__{2,}|\s{2,}|\t)\s*([ivxlcdm]{1,6}|\d{1,4})\s*$""", RegexOption.IGNORE_CASE)
+        if (tocStartPage < 0) {
+            for (pg in frontSearchPages) {
+                val lines = mergeSameBaselineLines(pagesLines[pg].orEmpty())
+                val hits = lines.count { tocDottedOrWideRegex.matches(it.text.trim()) }
+                if (hits >= 4) {
+                    tocStartPage = pg
+                    break
+                }
             }
         }
         if (tocStartPage < 0) return PrintedTocResult()
@@ -581,6 +669,7 @@ class PdfStructureExtractor(
         data class RawTocEntry(
             val title: String,
             val printedPage: Int,
+            val isRoman: Boolean,
             val leftX: Float,
             val fontSizePt: Float,
             val isBold: Boolean
@@ -589,37 +678,118 @@ class PdfStructureExtractor(
         val tocCandidates = mutableListOf<RawTocEntry>()
         val detectedTocPages = mutableSetOf<Int>()
         var tocEndPage = tocStartPage
-        val tocDottedOrWideRegex = Regex("""^(.+?)\s*(?:\.{2,}|·{2,}|_{2,}|\s{2,}|\t)\s*(\d{1,4})\s*$""")
-        val simpleTrailingNumRegex = Regex("""^((?:Chapter|Part|Unit|Module|Lesson|Appendix|Section|\d+(?:\.\d+){0,3})[\s:.].+?)\s+(\d{1,4})\s*$""", RegexOption.IGNORE_CASE)
 
-        for (pg in sortedPages.filter { it in tocStartPage..(tocStartPage + 12) }) {
-            val lines = pagesLines[pg].orEmpty().sortedBy { it.topY }
+        val simpleTrailingNumRegex = Regex(
+            """^((?:Chapter|Ch\.?|Part|Book|Unit|Module|Lesson|Appendix|Section|Prologue|Epilogue|Introduction|Preface|Foreword|Conclusion|Afterword|Bibliography|References|Glossary|Notes|Index|Acknowledgments?|Dedication|\d+(?:\.\d+){0,3})[\s:.\-–—]?.*?)\s+([ivxlcdm]{1,6}|\d{1,4})\s*$""",
+            RegexOption.IGNORE_CASE
+        )
+        val generalConfirmedTocLineRegex = Regex("""^([A-Za-z0-9“"'(].{1,105}?)\s+(\d{1,4}|[ivxlcdm]{1,6})\s*$""", RegexOption.IGNORE_CASE)
+
+        fun parsePrintedPageToken(token: String): Pair<Int, Boolean>? {
+            val trimmed = token.trim()
+            trimmed.toIntOrNull()?.let { num ->
+                if (num in 1..maxOf(totalPages + 50, 1)) return num to false
+                return null
+            }
+            val roman = parseRomanNumeral(trimmed)
+            if (roman != null && roman in 1..80) return roman to true
+            return null
+        }
+
+        fun extractTocMatch(text: String, allowGeneralSingleSpace: Boolean): Pair<String, Pair<Int, Boolean>>? {
+            val t = text.trim()
+            if (t.length < 3 || isTocHeaderText(t)) return null
+            val m = tocDottedOrWideRegex.find(t)
+                ?: simpleTrailingNumRegex.find(t)
+                ?: if (allowGeneralSingleSpace) generalConfirmedTocLineRegex.find(t) else null
+            if (m == null) return null
+            val entryTitle = m.groupValues[1].trim().trimEnd('.', '·', '…', '_', '-', '—', ' ')
+            if (entryTitle.length !in 2..120) return null
+            if (entryTitle.all { it.isDigit() || it == '.' || it == ' ' }) return null
+            // Avoid accidentally parsing prose sentences or copyright lines as TOC rows
+            if (allowGeneralSingleSpace && entryTitle.endsWith(".") && entryTitle.length > 65) return null
+            val parsed = parsePrintedPageToken(m.groupValues[2]) ?: return null
+            // Avoid matching years like "Copyright 2021" on front pages
+            if (!parsed.second && parsed.first > totalPages && parsed.first in 1900..2100) return null
+            if (!parsed.second && parsed.first > totalPages + 25) return null
+            return entryTitle to parsed
+        }
+
+        var consecutiveEmptyTocPages = 0
+        for (pg in sortedPages.filter { it in tocStartPage..(tocStartPage + 18) }) {
+            val mergedLines = mergeSameBaselineLines(pagesLines[pg].orEmpty())
+            val hasHeaderOnPage = mergedLines.any { isTocHeaderText(it.text) }
+            val strongHitsOnPage = mergedLines.count { extractTocMatch(it.text, allowGeneralSingleSpace = false) != null }
+            val allowLooseOnPage = hasHeaderOnPage || strongHitsOnPage >= 2 || (pg > tocStartPage && detectedTocPages.contains(pg - 1))
+
             var foundOnPage = 0
-            for (line in lines) {
+            var pendingPrefixLine: ExtractedPdfLine? = null
+
+            for (idx in mergedLines.indices) {
+                val line = mergedLines[idx]
                 val t = line.text.trim()
-                val m = tocDottedOrWideRegex.find(t) ?: simpleTrailingNumRegex.find(t)
-                if (m != null) {
-                    val entryTitle = m.groupValues[1].trim().trimEnd('.', '·', '_', ' ')
-                    val printedPage = m.groupValues[2].toIntOrNull() ?: continue
-                    if (entryTitle.length in 2..110 && printedPage in 1..totalPages) {
+                if (t.isEmpty() || isTocHeaderText(t)) {
+                    pendingPrefixLine = null
+                    continue
+                }
+                // Skip standalone page numbers (running footer/header on the TOC page itself)
+                if (t.matches(Regex("^(?:[ivxlcdm]{1,6}|\\d{1,4})$", RegexOption.IGNORE_CASE))) {
+                    continue
+                }
+
+                val direct = extractTocMatch(t, allowGeneralSingleSpace = allowLooseOnPage)
+                if (direct != null) {
+                    val (rawTitle, pagePair) = direct
+                    val finalTitle = if (pendingPrefixLine != null &&
+                        (line.topY - pendingPrefixLine.topY) <= maxOf(line.fontSizePt, pendingPrefixLine.fontSizePt) * 2.8f
+                    ) {
+                        val prefix = pendingPrefixLine.text.trim().trimEnd(':', '-', '—')
+                        if (BARE_CHAPTER_LABEL_PATTERN.matcher(prefix).matches() || prefix.matches(Regex("^\\d{1,2}\\.?$"))) {
+                            "$prefix: $rawTitle"
+                        } else {
+                            "$prefix $rawTitle"
+                        }
+                    } else {
+                        rawTitle
+                    }
+                    val effectiveLeftX = pendingPrefixLine?.leftX ?: line.leftX
+                    val effectiveFontSize = maxOf(pendingPrefixLine?.fontSizePt ?: 0f, line.fontSizePt)
+                    val effectiveBold = (pendingPrefixLine?.isBold == true) || line.isBold
+                    pendingPrefixLine = null
+
+                    if (finalTitle.length in 2..135) {
                         tocCandidates.add(
                             RawTocEntry(
-                                title = entryTitle,
-                                printedPage = printedPage,
-                                leftX = line.leftX,
-                                fontSizePt = line.fontSizePt,
-                                isBold = line.isBold
+                                title = finalTitle.replace(Regex("\\s+"), " ").trim(),
+                                printedPage = pagePair.first,
+                                isRoman = pagePair.second,
+                                leftX = effectiveLeftX,
+                                fontSizePt = effectiveFontSize,
+                                isBold = effectiveBold
                             )
                         )
                         foundOnPage++
                     }
+                } else {
+                    // Could be line 1 of a 2-line wrapped TOC entry ("Chapter 4" or wrapped long title)
+                    val looksLikePendingPrefix = t.length in 1..85 &&
+                        (BARE_CHAPTER_LABEL_PATTERN.matcher(t).matches() ||
+                            t.matches(Regex("^\\d{1,2}\\.?$")) ||
+                            (allowLooseOnPage && !t.endsWith(".") && t.length <= 65))
+                    pendingPrefixLine = if (looksLikePendingPrefix) line else null
                 }
             }
+
             if (foundOnPage > 0) {
                 detectedTocPages.add(pg)
                 tocEndPage = pg
+                consecutiveEmptyTocPages = 0
+            } else if (pg == tocStartPage && hasHeaderOnPage) {
+                detectedTocPages.add(pg)
+                tocEndPage = pg
             } else if (pg > tocStartPage) {
-                break
+                consecutiveEmptyTocPages++
+                if (consecutiveEmptyTocPages >= 1) break
             }
         }
 
@@ -627,62 +797,168 @@ class PdfStructureExtractor(
             return PrintedTocResult(emptyList(), detectedTocPages)
         }
 
-        // Resolve real PDF pages by matching titles on pages after tocEndPage, and estimating page-number offset
+        // Pre-build searchable single-line & 2-line combined headings per page after TOC
         val bodyFontSize = computeBodyFontSize(pagesLines.values.flatten())
         val searchPages = sortedPages.filter { it > tocEndPage }
-        val resolvedOffsets = mutableListOf<Int>()
-        val directMatches = mutableMapOf<Int, Int>()
+        if (searchPages.isEmpty()) {
+            return PrintedTocResult(emptyList(), detectedTocPages)
+        }
+
+        fun pageMatchesHeading(pg: Int, targetTitle: String, requireProminent: Boolean): Boolean {
+            val lines = pagesLines[pg].orEmpty().sortedBy { it.topY }
+            if (lines.isEmpty()) return false
+            for (i in lines.indices) {
+                val line = lines[i]
+                val isProminent = !requireProminent ||
+                    line.fontSizePt >= bodyFontSize * 1.06f ||
+                    line.isBold ||
+                    isExplicitChapterStart(line.text) ||
+                    i <= 4
+                if (isProminent && titlesMatchFlexible(line.text, targetTitle)) {
+                    return true
+                }
+                // Also test joining consecutive 2-line headings (e.g. "CHAPTER 4" + "THE MAN WHO...")
+                if (i + 1 < lines.size) {
+                    val next = lines[i + 1]
+                    val gap = next.topY - line.topY
+                    if (gap in 0f..(maxOf(line.fontSizePt, next.fontSizePt) * 3.2f)) {
+                        val combined = "${line.text.trim()} ${next.text.trim()}"
+                        val combinedProminent = !requireProminent ||
+                            line.fontSizePt >= bodyFontSize * 1.04f ||
+                            next.fontSizePt >= bodyFontSize * 1.04f ||
+                            line.isBold || next.isBold ||
+                            isExplicitChapterStart(combined) ||
+                            i <= 4
+                        if (combinedProminent && titlesMatchFlexible(combined, targetTitle)) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        // Calibrate Arabic & Roman printed-page-to-PDF-page offsets using consensus across matches
+        val arabicOffsets = mutableListOf<Int>()
+        val romanOffsets = mutableListOf<Int>()
+        val initialMatches = mutableMapOf<Int, Int>()
 
         for ((idx, entry) in tocCandidates.withIndex()) {
             val normTarget = normalizeHeadingComparison(entry.title)
             if (normTarget.length < 3) continue
 
-            val matchedPage = searchPages.firstOrNull { pg ->
-                pagesLines[pg].orEmpty().any { line ->
-                    val normLine = normalizeHeadingComparison(line.text)
-                    val isProminent = line.fontSizePt >= bodyFontSize * 1.08f || line.isBold ||
-                        isExplicitChapterStart(line.text)
-                    isProminent && normLine.isNotBlank() &&
-                        (normLine == normTarget || normLine.contains(normTarget) || normTarget.contains(normLine))
-                }
+            // Search in plausible monotonic window when possible
+            val candidatePages = if (entry.isRoman) {
+                sortedPages.filter { it in 1..(minOf(totalPages, tocEndPage + 45)) && it !in detectedTocPages }
+            } else {
+                searchPages
+            }
+            val matchedPage = candidatePages.firstOrNull { pg ->
+                pageMatchesHeading(pg, entry.title, requireProminent = true)
             }
             if (matchedPage != null) {
-                directMatches[idx] = matchedPage
-                resolvedOffsets.add(matchedPage - entry.printedPage)
+                val offset = matchedPage - entry.printedPage
+                if (offset in -15..80) {
+                    initialMatches[idx] = matchedPage
+                    if (entry.isRoman) romanOffsets.add(offset) else arabicOffsets.add(offset)
+                }
             }
         }
 
-        if (resolvedOffsets.isEmpty()) {
+        // Fallback offset calibration from standalone printed page numbers in headers/footers
+        fun estimateOffsetFromPageNumbers(arabic: Boolean): Int? {
+            val samples = mutableListOf<Int>()
+            for (pg in searchPages.take(40)) {
+                val lines = pagesLines[pg].orEmpty()
+                for (line in lines) {
+                    val topFrac = if (line.pageHeight > 0f) line.topY / line.pageHeight else 0.5f
+                    if (topFrac > 0.14f && topFrac < 0.85f) continue
+                    val t = line.text.trim()
+                    if (arabic) {
+                        val num = t.toIntOrNull()
+                        if (num != null && num in 1..totalPages) {
+                            val diff = pg - num
+                            if (diff in -10..60) samples.add(diff)
+                        }
+                    } else {
+                        val rom = parseRomanNumeral(t)
+                        if (rom != null && rom in 1..60) {
+                            val diff = pg - rom
+                            if (diff in -10..20) samples.add(diff)
+                        }
+                    }
+                }
+            }
+            if (samples.size < 2) return null
+            // Pick the mode (most frequent offset)
+            return samples.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+        }
+
+        fun pickConsensusOffset(offsets: List<Int>): Int? {
+            if (offsets.isEmpty()) return null
+            // Prefer the most frequent offset (clustering within ±1 page), breaking ties by median
+            val byCount = offsets.groupingBy { it }.eachCount()
+            val best = byCount.entries.maxWithOrNull(compareBy<Map.Entry<Int, Int>> { it.value }.thenBy { -abs(it.key) })
+            return if (best != null && best.value >= 2) {
+                best.key
+            } else {
+                offsets.sorted()[offsets.size / 2]
+            }
+        }
+
+        val consensusArabicOffset = pickConsensusOffset(arabicOffsets)
+            ?: estimateOffsetFromPageNumbers(arabic = true)
+        val consensusRomanOffset = pickConsensusOffset(romanOffsets)
+            ?: estimateOffsetFromPageNumbers(arabic = false)
+
+        if (consensusArabicOffset == null && consensusRomanOffset == null && initialMatches.size < 2) {
             return PrintedTocResult(emptyList(), detectedTocPages)
         }
-        val medianOffset = resolvedOffsets.sorted()[resolvedOffsets.size / 2]
 
-        // Infer indentation tiers among TOC entries for non-numbered books
         val minLeftX = tocCandidates.minOf { it.leftX }
+        val maxFontSize = tocCandidates.maxOf { it.fontSizePt }
         val hasExplicitInToc = tocCandidates.any { isExplicitChapterStart(it.title) }
-
-        val minContentPage = tocEndPage + 1
-        val maxContentPage = sortedPages.lastOrNull() ?: return PrintedTocResult(emptyList(), detectedTocPages)
-        if (minContentPage > maxContentPage) {
-            return PrintedTocResult(emptyList(), detectedTocPages)
-        }
+        val minContentPage = (tocEndPage + 1).coerceAtMost(sortedPages.last())
+        val maxContentPage = sortedPages.last()
 
         val rawItems = mutableListOf<ExtractedOutlineItem>()
         for ((idx, entry) in tocCandidates.withIndex()) {
-            val pdfPage = (directMatches[idx] ?: (entry.printedPage + medianOffset))
-                .coerceIn(minContentPage, maxContentPage)
+            val activeOffset = if (entry.isRoman) consensusRomanOffset else consensusArabicOffset
+            val expectedPage = if (activeOffset != null) {
+                (entry.printedPage + activeOffset).coerceIn(1, maxContentPage)
+            } else {
+                null
+            }
+
+            // Verify or refine against the expected page window (±3 pages) so an accidental
+            // earlier/later mention never hijacks a chapter's true page number!
+            val refinedPage = when {
+                expectedPage != null -> {
+                    val window = ((expectedPage - 2).coerceAtLeast(1)..(expectedPage + 3).coerceAtMost(maxContentPage))
+                        .filter { it !in detectedTocPages }
+                    window.firstOrNull { pg -> pageMatchesHeading(pg, entry.title, requireProminent = false) }
+                        ?: initialMatches[idx]?.takeIf { abs(it - expectedPage) <= 4 }
+                        ?: expectedPage
+                }
+                initialMatches[idx] != null -> initialMatches[idx]!!
+                else -> continue
+            }.coerceIn(if (entry.isRoman) 1 else minContentPage, maxContentPage)
+
+            val isFlushLeft = entry.leftX <= minLeftX + 10f
+            val isProminentTocRow = entry.isBold || entry.fontSizePt >= maxFontSize - 0.6f
 
             val level = when {
-                isExplicitChapterStart(entry.title) -> 0
                 SUBTOPIC_NUMBERED_PATTERN.matcher(entry.title).matches() -> 2
                 TOPIC_NUMBERED_PATTERN.matcher(entry.title).matches() -> 1
-                TOP_LEVEL_NUMBERED_PATTERN.matcher(entry.title).matches() && !hasExplicitInToc -> 0
-                entry.leftX >= minLeftX + 26f -> 2
-                entry.leftX >= minLeftX + 10f -> 1
-                hasExplicitInToc -> 1
-                else -> 0
+                isExplicitChapterStart(entry.title) -> 0
+                TOP_LEVEL_NUMBERED_PATTERN.matcher(entry.title).matches() -> 0
+                entry.leftX >= minLeftX + 28f -> 2
+                entry.leftX >= minLeftX + 12f -> 1
+                isFlushLeft && (isProminentTocRow || !hasExplicitInToc) -> 0
+                isFlushLeft -> 0
+                else -> 1
             }
-            rawItems.add(ExtractedOutlineItem(title = entry.title, pageNumber = pdfPage, level = level))
+            rawItems.add(ExtractedOutlineItem(title = entry.title, pageNumber = refinedPage, level = level))
         }
 
         val normalized = normalizeOutlineHierarchy(
@@ -1378,14 +1654,14 @@ class PdfStructureExtractor(
         // Matches true top-level chapters ("Chapter 1", "Chapter 1: Foundations", "Unit 2", "Prologue", etc.)
         // Intentionally excludes "Section 1.1", "Part of the...", "Book reviews...", and decimal sub-numbers "1.1"
         private val CHAPTER_PATTERN = java.util.regex.Pattern.compile(
-            "^(?:Chapter|Unit|Module|Lesson|Appendix)\\s+$CHAPTER_NUM_TOKEN(?!\\.\\d)(?:\\s*[:.\\-–—]\\s*.*|\\s+[A-Z0-9].*)?$" +
+            "^(?:Chapter|Ch\\.?|Unit|Module|Lesson|Appendix)\\s+$CHAPTER_NUM_TOKEN(?!\\.\\d)(?:\\s*[:.\\-–—]\\s*.*|\\s+[A-Z0-9].*)?$" +
                 "|^(?:Part|Book)\\s+$CHAPTER_NUM_TOKEN(?!\\.\\d)(?:\\s*[:.\\-–—]\\s*.*)?$" +
-                "|^(?:Prologue|Epilogue|Introduction|Preface|Foreword|Conclusion|Afterword|Bibliography|References|Glossary)$",
+                "|^(?:Prologue|Epilogue|Introduction|Preface|Foreword|Conclusion|Afterword|Bibliography|References|Glossary|Acknowledgments?|Dedication|About the Author|Author'?s Note|Notes|Index)$",
             java.util.regex.Pattern.CASE_INSENSITIVE
         )
 
         private val BARE_CHAPTER_LABEL_PATTERN = java.util.regex.Pattern.compile(
-            "^(?:Chapter|Part|Book|Unit|Module|Lesson|Appendix)\\s+$CHAPTER_NUM_TOKEN[:.\\-–—\\s]*$",
+            "^(?:Chapter|Ch\\.?|Part|Book|Unit|Module|Lesson|Appendix)\\s+$CHAPTER_NUM_TOKEN[:.\\-–—\\s]*$",
             java.util.regex.Pattern.CASE_INSENSITIVE
         )
 
@@ -1412,6 +1688,17 @@ class PdfStructureExtractor(
             java.util.regex.Pattern.CASE_INSENSITIVE
         )
 
+        private val CHAPTER_PREFIX_STRIP_REGEX = Regex(
+            "^(?:(?:chapter|ch\\.?|part|book|unit|module|lesson|appendix)\\s+$CHAPTER_NUM_TOKEN|\\d{1,3}(?:\\.\\d{1,3})*|[ivxlcdm]{1,6})\\s*[:.\\-–—]?\\s*",
+            RegexOption.IGNORE_CASE
+        )
+
+        fun isExplicitChapterHeading(text: String): Boolean {
+            val trimmed = text.trim()
+            if (trimmed.isEmpty() || trimmed.length > 130) return false
+            return CHAPTER_PATTERN.matcher(trimmed).matches()
+        }
+
         fun normalizeHeadingComparison(text: String): String {
             return text.lowercase()
                 .replace(Regex("[^a-z0-9\\s]"), " ")
@@ -1419,10 +1706,77 @@ class PdfStructureExtractor(
                 .trim()
         }
 
+        fun stripChapterNumberPrefix(text: String): String {
+            val stripped = text.trim().replaceFirst(CHAPTER_PREFIX_STRIP_REGEX, "")
+            return normalizeHeadingComparison(stripped)
+        }
+
         /**
-         * Determines which outline nesting depth holds real chapters:
-         * handles single-root Book Title bookmarks at level 0 wrapping chapters at level 1,
-         * or Part wrappers at level 0 wrapping explicit "Chapter ..." nodes at level 1.
+         * Accurate, false-positive-resistant heading matcher supporting prefix variations
+         * (e.g., "Chapter 4: Foundations" vs "4. Foundations" vs "Foundations"), while
+         * rejecting tiny 1–2 char fragments like "1" or "A" from falsely matching full titles.
+         */
+        fun titlesMatchFlexible(a: String, b: String): Boolean {
+            val na = normalizeHeadingComparison(a)
+            val nb = normalizeHeadingComparison(b)
+            if (na.isEmpty() || nb.isEmpty()) return false
+            if (na == nb) return true
+
+            val minLen = minOf(na.length, nb.length)
+            val maxLen = maxOf(na.length, nb.length)
+            if (minLen >= 4 && (na.startsWith(nb) || nb.startsWith(na))) {
+                if (minLen.toFloat() / maxLen.toFloat() >= 0.45f || minLen >= 10) return true
+            }
+
+            val sa = stripChapterNumberPrefix(a)
+            val sb = stripChapterNumberPrefix(b)
+            if (sa.length >= 4 && sb.length >= 4) {
+                if (sa == sb) return true
+                val sMin = minOf(sa.length, sb.length)
+                val sMax = maxOf(sa.length, sb.length)
+                if (sMin >= 5 && (sa.startsWith(sb) || sb.startsWith(sa)) &&
+                    (sMin.toFloat() / sMax.toFloat() >= 0.55f || sMin >= 12)
+                ) {
+                    return true
+                }
+            }
+
+            // Token-overlap check for minor OCR/punctuation/prefix differences
+            val tokensA = na.split(' ').filter { it.length >= 3 }.toSet()
+            val tokensB = nb.split(' ').filter { it.length >= 3 }.toSet()
+            if (tokensA.size >= 2 && tokensB.size >= 2) {
+                val smaller = if (tokensA.size <= tokensB.size) tokensA else tokensB
+                val larger = if (tokensA.size <= tokensB.size) tokensB else tokensA
+                val overlap = smaller.count { it in larger }
+                if (overlap.toFloat() / smaller.size.toFloat() >= 0.85f &&
+                    smaller.size.toFloat() / larger.size.toFloat() >= 0.5f
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private fun parseRomanNumeral(raw: String): Int? {
+            val s = raw.trim().lowercase()
+            if (s.isEmpty() || s.length > 8) return null
+            if (!s.all { it in "ivxlcdm" }) return null
+            val values = mapOf('i' to 1, 'v' to 5, 'x' to 10, 'l' to 50, 'c' to 100, 'd' to 500, 'm' to 1000)
+            var total = 0
+            var prev = 0
+            for (ch in s.reversed()) {
+                val v = values[ch] ?: return null
+                if (v < prev) total -= v else {
+                    total += v
+                    prev = v
+                }
+            }
+            return total.takeIf { it > 0 }
+        }
+
+        /**
+         * Determines whether level-0 wrapper nodes (such as a single Book Title root or Part I/II
+         * container folders wrapping nested Chapters) should be unwrapped.
          */
         fun resolveChapterOutlineLevel(outlineItems: List<ExtractedOutlineItem>): Int {
             if (outlineItems.isEmpty()) return 0
@@ -1435,16 +1789,27 @@ class PdfStructureExtractor(
             if (minCount <= 1 && nextLevel != null && (byLevel[nextLevel]?.size ?: 0) >= 2) {
                 return nextLevel
             }
-            if (nextLevel != null && minCount <= 4) {
-                val minHasChapters = byLevel[minLevel].orEmpty().any {
-                    CHAPTER_PATTERN.matcher(it.title.trim()).matches() &&
-                        !it.title.trim().startsWith("Part", ignoreCase = true)
-                }
+            if (nextLevel != null) {
                 val nextChapterCount = byLevel[nextLevel].orEmpty().count {
-                    CHAPTER_PATTERN.matcher(it.title.trim()).matches()
+                    CHAPTER_PATTERN.matcher(it.title.trim()).matches() ||
+                        TOP_LEVEL_NUMBERED_PATTERN.matcher(it.title.trim()).matches()
                 }
-                if (!minHasChapters && nextChapterCount >= 2) {
-                    return nextLevel
+                val minLevelParents = outlineItems.indices.count { i ->
+                    outlineItems[i].level == minLevel &&
+                        i + 1 < outlineItems.size &&
+                        outlineItems[i + 1].level > minLevel
+                }
+                if (minLevelParents >= 1 && nextChapterCount >= 2) {
+                    val partLikeParents = outlineItems.indices.count { i ->
+                        val item = outlineItems[i]
+                        item.level == minLevel &&
+                            i + 1 < outlineItems.size &&
+                            outlineItems[i + 1].level > minLevel &&
+                            !item.title.trim().startsWith("Chapter", ignoreCase = true)
+                    }
+                    if (partLikeParents >= 1 && minCount <= 12) {
+                        return nextLevel
+                    }
                 }
             }
             return minLevel
@@ -1457,13 +1822,12 @@ class PdfStructureExtractor(
 
         /**
          * Normalizes a PDF outline tree so that:
-         * - Level 0 = Chapters (unwrapping single Book Title / Part wrappers)
+         * - Level 0 = Chapters (safely unwrapping Book Title / Part container nodes while PRESERVING
+         *   all childless level-0 siblings like Preface, Introduction, Prologue, Epilogue, Appendix!)
          * - Level 1 = Topics (H2)
          * - Level 2 = Sub-topics (H3)
          * - Level 3+ = Deeper Sub-topics (H4)
-         * Also strips noisy per-page bookmarks ("Page 1", "Page 2", ...) and rescues flat PDF
-         * outlines where chapters, topics (1.1 or unnumbered), and sub-topics (1.1.1) were all
-         * stored at level 0 so a 208-page PDF never explodes into 208 chapters.
+         * Strictly idempotent so calling multiple times never drops or demotes real chapters.
          */
         fun normalizeOutlineHierarchy(
             outlineItems: List<ExtractedOutlineItem>,
@@ -1471,33 +1835,58 @@ class PdfStructureExtractor(
         ): List<ExtractedOutlineItem> {
             if (outlineItems.isEmpty()) return emptyList()
 
-            // 1. Strip per-page bookmarks ("Page 1", "2", "Slide 14", etc.)
+            // 1. Strip per-page boilerplate bookmarks ("Page 1", "2", "Slide 14", etc.)
             val meaningful = outlineItems.filterNot {
                 PER_PAGE_BOOKMARK_PATTERN.matcher(it.title.trim()).matches()
             }
             if (meaningful.isEmpty()) return emptyList()
 
+            val minLevel = meaningful.minOf { it.level }
             val chapterLevel = resolveChapterOutlineLevel(meaningful)
 
-            // 2. Drop wrapper root nodes above chapterLevel (e.g. single Book Title root)
-            val shifted = meaningful
-                .filter { it.level >= chapterLevel }
-                .map { it.copy(level = (it.level - chapterLevel).coerceAtLeast(0)) }
+            // 2. Smart unwrap: if chapterLevel > minLevel, unwrap wrapper containers that have children
+            //    while KEEPING all childless minLevel siblings (Preface, Introduction, Epilogue, Appendix, etc.) at level 0!
+            val shifted = if (chapterLevel > minLevel) {
+                val out = mutableListOf<ExtractedOutlineItem>()
+                val minCount = meaningful.count { it.level == minLevel }
+                val isSingleBookRoot = minCount == 1
+                var i = 0
+                while (i < meaningful.size) {
+                    val item = meaningful[i]
+                    if (item.level < chapterLevel) {
+                        val hasChildren = (i + 1 < meaningful.size && meaningful[i + 1].level > item.level)
+                        if (isSingleBookRoot && hasChildren) {
+                            // Drop single Book Title wrapper root
+                        } else if (!hasChildren) {
+                            // Preserve childless sibling chapters/front-matter/back-matter at level 0!
+                            out.add(item.copy(level = 0))
+                        } else {
+                            // Part/Section wrapper with children: keep Part node ONLY if it starts on an earlier
+                            // dedicated intro page before its first child; otherwise unwrap so its chapters sit cleanly at level 0.
+                            val firstChildPage = meaningful[i + 1].pageNumber
+                            if (item.pageNumber < firstChildPage && !item.title.equals("Contents", ignoreCase = true)) {
+                                out.add(item.copy(level = 0))
+                            }
+                        }
+                    } else {
+                        out.add(item.copy(level = (item.level - chapterLevel).coerceAtLeast(0)))
+                    }
+                    i++
+                }
+                out
+            } else {
+                meaningful.map { it.copy(level = (it.level - minLevel).coerceAtLeast(0)) }
+            }
 
             if (shifted.isEmpty()) return emptyList()
 
-            // 3. Rescue flat outlines mixing real chapters with topics/sub-topics all at level 0
+            // 3. Rescue flat outlines ONLY for explicit decimal sub-numbering (1.1, 1.1.1, Section 1.2)
+            //    so unnumbered or titled chapters (Preface, Prologue, Epilogue, named chapters) are NEVER demoted!
             val level0 = shifted.filter { it.level == 0 }
-            val hasNestedAlready = shifted.any { it.level > 0 }
-            val explicitChapterInL0 = level0.count { CHAPTER_PATTERN.matcher(it.title.trim()).matches() }
-            val topNumInL0 = level0.count { TOP_LEVEL_NUMBERED_PATTERN.matcher(it.title.trim()).matches() }
             val topicNumInL0 = level0.count { TOPIC_NUMBERED_PATTERN.matcher(it.title.trim()).matches() }
             val subTopicNumInL0 = level0.count { SUBTOPIC_NUMBERED_PATTERN.matcher(it.title.trim()).matches() }
 
-            val needsFlatRescue = (explicitChapterInL0 >= 2 && level0.size > explicitChapterInL0 && (!hasNestedAlready || topicNumInL0 >= 2 || subTopicNumInL0 >= 2)) ||
-                (topNumInL0 >= 2 && (topicNumInL0 >= 2 || subTopicNumInL0 >= 2))
-
-            val normalized = if (needsFlatRescue) {
+            val normalized = if (topicNumInL0 >= 1 || subTopicNumInL0 >= 1) {
                 shifted.map { item ->
                     if (item.level != 0) {
                         item
@@ -1506,10 +1895,6 @@ class PdfStructureExtractor(
                         val inferredLevel = when {
                             SUBTOPIC_NUMBERED_PATTERN.matcher(t).matches() -> 2
                             TOPIC_NUMBERED_PATTERN.matcher(t).matches() -> 1
-                            CHAPTER_PATTERN.matcher(t).matches() -> 0
-                            explicitChapterInL0 == 0 && TOP_LEVEL_NUMBERED_PATTERN.matcher(t).matches() -> 0
-                            explicitChapterInL0 >= 2 -> 1
-                            !hasNestedAlready -> 1
                             else -> 0
                         }
                         item.copy(level = inferredLevel)
@@ -1519,15 +1904,15 @@ class PdfStructureExtractor(
                 shifted
             }
 
-            // 4. Sanity-guard against bloated noisy outlines (e.g. 208 per-page/per-heading bookmarks in a 208-page PDF)
+            // 4. Conservative sanity guard: only reject true per-page noise (almost every page bookmarked with non-chapters)
             val finalLevel0 = normalized.filter { it.level == 0 }
-            if (totalPdfPages >= 25 && finalLevel0.size >= 40) {
+            if (totalPdfPages >= 40 && finalLevel0.size >= 60) {
                 val pagesPerChapter = totalPdfPages.toFloat() / finalLevel0.size.toFloat()
                 val explicitRatio = finalLevel0.count {
                     val t = it.title.trim()
                     CHAPTER_PATTERN.matcher(t).matches() || TOP_LEVEL_NUMBERED_PATTERN.matcher(t).matches()
                 }.toFloat() / finalLevel0.size.toFloat()
-                if (pagesPerChapter < 1.6f && explicitRatio < 0.45f) {
+                if (pagesPerChapter < 1.15f && explicitRatio < 0.15f) {
                     return emptyList()
                 }
             }

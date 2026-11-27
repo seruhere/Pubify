@@ -101,6 +101,7 @@ import com.serma.pubify.ui.components.LocalGlassPalette
 import com.serma.pubify.ui.components.LuxuryGold
 import com.serma.pubify.ui.components.LuxuryGoldDeep
 import com.serma.pubify.ui.components.CrystalBlue
+import com.serma.pubify.ui.components.iosTapBounce
 import com.serma.pubify.ui.components.luxuryBlueColor
 import com.serma.pubify.ui.components.luxuryFilterChipColors
 import com.serma.pubify.ui.components.luxuryGoldBlueBorderBrush
@@ -642,13 +643,15 @@ private fun DailyActivityChartCard(
                         selected = selectedMetric == 0,
                         onClick = { onMetricChange(0) },
                         label = { Text("Minutes", style = MaterialTheme.typography.labelSmall) },
-                        colors = luxuryFilterChipColors(useGoldAccent = true)
+                        colors = luxuryFilterChipColors(useGoldAccent = true),
+                        modifier = Modifier.iosTapBounce(pressedScale = 0.94f)
                     )
                     FilterChip(
                         selected = selectedMetric == 1,
                         onClick = { onMetricChange(1) },
                         label = { Text("Pages", style = MaterialTheme.typography.labelSmall) },
-                        colors = luxuryFilterChipColors(useGoldAccent = false)
+                        colors = luxuryFilterChipColors(useGoldAccent = false),
+                        modifier = Modifier.iosTapBounce(pressedScale = 0.94f)
                     )
                 }
             }

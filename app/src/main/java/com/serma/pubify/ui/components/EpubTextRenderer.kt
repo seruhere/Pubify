@@ -2,9 +2,11 @@ package com.serma.pubify.ui.components
 
 import android.graphics.BitmapFactory
 import android.util.LruCache
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +26,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.CheckCircle
@@ -63,6 +67,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.serma.pubify.R
@@ -114,6 +119,10 @@ fun EpubLazyTextRenderer(
     activeTtsParagraphIndex: Int? = null,
     highlights: List<BookHighlight> = emptyList(),
     bookImages: Map<String, ByteArray> = emptyMap(),
+    previousChapterTitle: String? = null,
+    nextChapterTitle: String? = null,
+    onPreviousChapter: (() -> Unit)? = null,
+    onNextChapter: (() -> Unit)? = null,
     onWordLongPress: ((word: String, line: String, fullParagraph: String, paragraphIndex: Int, existingHighlight: BookHighlight?) -> Unit)? = null,
     onTapAtWindowX: ((windowX: Float) -> Unit)? = null,
     onNavigateToLibrary: (() -> Unit)? = null,
@@ -134,6 +143,51 @@ fun EpubLazyTextRenderer(
             .testTag("epub_text_renderer")
     ) {
         item(key = "chapter_header_${chapter.index}") {
+            if (!previousChapterTitle.isNullOrBlank() && onPreviousChapter != null) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 14.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onPreviousChapter() }
+                        .testTag("scroll_previous_chapter_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = settings.theme.accentColor.copy(alpha = 0.08f),
+                    border = BorderStroke(1.dp, settings.theme.accentColor.copy(alpha = 0.22f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Previous chapter",
+                            tint = settings.theme.accentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "PREVIOUS CHAPTER",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.8.sp
+                                ),
+                                color = settings.theme.accentColor
+                            )
+                            Text(
+                                text = previousChapterTitle,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                color = settings.theme.textColor.copy(alpha = 0.85f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
             ChapterHeaderSection(
                 chapter = chapter,
                 settings = settings,
@@ -177,6 +231,63 @@ fun EpubLazyTextRenderer(
                     bookTitle = bookTitle,
                     onNavigateToLibrary = onNavigateToLibrary
                 )
+            }
+        } else if (!nextChapterTitle.isNullOrBlank() && onNextChapter != null) {
+            item(key = "next_chapter_footer_${chapter.index}") {
+                Spacer(modifier = Modifier.height(28.dp))
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable { onNextChapter() }
+                        .testTag("scroll_next_chapter_button"),
+                    shape = RoundedCornerShape(18.dp),
+                    color = settings.theme.accentColor.copy(alpha = 0.11f),
+                    border = BorderStroke(1.dp, settings.theme.accentColor.copy(alpha = 0.28f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = "END OF CHAPTER • KEEP SCROLLING OR TAP",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.7.sp
+                                ),
+                                color = settings.theme.accentColor
+                            )
+                            Text(
+                                text = nextChapterTitle,
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = settings.theme.textColor,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Surface(
+                            shape = CircleShape,
+                            color = settings.theme.accentColor,
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = "Next chapter",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 

@@ -16,6 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -29,7 +30,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,7 +50,6 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -62,10 +64,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -78,14 +82,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
-import androidx.compose.runtime.key
-import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
-import com.serma.pubify.data.firebase.FirebaseSyncRepository
-import com.serma.pubify.data.firebase.authStateFlow
 import com.serma.pubify.reader.ThemeMode
 import com.serma.pubify.ui.components.CrystalBlue
 import com.serma.pubify.ui.components.FloatingGlassPillNavBar
@@ -94,19 +92,13 @@ import com.serma.pubify.ui.components.GlassNavTabItem
 import com.serma.pubify.ui.components.IosMotion
 import com.serma.pubify.ui.components.LuxuryGold
 import com.serma.pubify.ui.components.LuxuryGoldDeep
-import com.serma.pubify.ui.screens.AuthScreen
 import com.serma.pubify.ui.screens.ConverterScreen
 import com.serma.pubify.ui.screens.LibraryScreen
 import com.serma.pubify.ui.screens.ReaderScreen
 import com.serma.pubify.ui.screens.ReadingStatsScreen
 import com.serma.pubify.ui.screens.ToolsScreen
 import com.serma.pubify.ui.theme.MyApplicationTheme
-import com.serma.pubify.ui.viewmodel.CloudSyncViewModel
 import com.serma.pubify.ui.viewmodel.ConverterViewModel
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -153,16 +145,24 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.LIQUID_GLASS -> true
             }
 
-            val currentUser by remember { Firebase.auth.authStateFlow() }
-                .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
-
             var showLaunchLoadingScreen by rememberSaveable { mutableStateOf(true) }
             LaunchedEffect(Unit) {
                 if (showLaunchLoadingScreen) {
-                    delay(1150L)
+                    delay(1050L)
                     showLaunchLoadingScreen = false
                 }
             }
+
+            val contentRevealScale = animateFloatAsState(
+                targetValue = if (showLaunchLoadingScreen) 0.955f else 1f,
+                animationSpec = IosMotion.fluidSpring(dampingRatio = 0.86f, stiffness = 310f),
+                label = "app_open_scale"
+            )
+            val contentRevealAlpha = animateFloatAsState(
+                targetValue = if (showLaunchLoadingScreen) 0.35f else 1f,
+                animationSpec = IosMotion.silkyTween(durationMillis = 420),
+                label = "app_open_alpha"
+            )
 
             MyApplicationTheme(
                 themeMode = themeMode,
@@ -171,63 +171,27 @@ class MainActivity : ComponentActivity() {
             ) {
                 CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        val signedInUser = currentUser
-                        val isGuestMode by viewModel.isGuestMode.collectAsStateWithLifecycle()
-
-                        if (signedInUser == null && !isGuestMode) {
-                            AuthScreen(
-                                onSkipSignIn = { viewModel.setGuestMode(true) },
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        } else if (signedInUser != null) {
-                            key(signedInUser.uid) {
-                                val cloudSyncViewModel: CloudSyncViewModel = viewModel(
-                                    key = signedInUser.uid,
-                                    factory = viewModelFactory {
-                                        initializer {
-                                            val app = checkNotNull(this[APPLICATION_KEY])
-                                            val db = FirebaseFirestore.getInstance(
-                                                app.getString(R.string.firestore_database_id)
-                                            )
-                                            CloudSyncViewModel(
-                                                repository = FirebaseSyncRepository(db),
-                                                currentUserId = signedInUser.uid
-                                            )
-                                        }
-                                    }
-                                )
-
-                                val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
-                                LaunchedEffect(signedInUser.uid, allBooks) {
-                                    cloudSyncViewModel.syncBooksSilently(
-                                        displayName = signedInUser.displayName ?: "Pubify Reader",
-                                        email = signedInUser.email,
-                                        photoUrl = signedInUser.photoUrl?.toString(),
-                                        books = allBooks
-                                    )
+                        MainAppContent(
+                            viewModel = viewModel,
+                            onShareEpub = { filePath, title -> shareEpub(filePath, title) },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    val s = contentRevealScale.value
+                                    scaleX = s
+                                    scaleY = s
+                                    alpha = contentRevealAlpha.value
                                 }
+                        )
 
-                                MainAppContent(
-                                    viewModel = viewModel,
-                                    cloudSyncViewModel = cloudSyncViewModel,
-                                    currentUser = signedInUser,
-                                    onShareEpub = { filePath, title -> shareEpub(filePath, title) }
-                                )
-                            }
-                        } else {
-                            MainAppContent(
-                                viewModel = viewModel,
-                                cloudSyncViewModel = null,
-                                currentUser = null,
-                                onShareEpub = { filePath, title -> shareEpub(filePath, title) }
-                            )
-                        }
-
-                        // Branded Launch Loading Screen showing App Name & Geometric Logo
                         AnimatedVisibility(
                             visible = showLaunchLoadingScreen,
-                            enter = fadeIn(tween(120)),
-                            exit = fadeOut(IosMotion.silkyTween(durationMillis = 380)),
+                            enter = fadeIn(tween(100)),
+                            exit = fadeOut(IosMotion.silkyTween(durationMillis = 400)) +
+                                scaleOut(
+                                    targetScale = 1.07f,
+                                    animationSpec = IosMotion.silkyTween(durationMillis = 400)
+                                ),
                             modifier = Modifier.fillMaxSize()
                         ) {
                             AppLaunchLoadingScreen(modifier = Modifier.fillMaxSize())
@@ -238,7 +202,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Requests the highest supported refresh rate (90Hz / 120Hz) at native resolution for ProMotion-smooth motion. */
     private fun preferHighestDisplayRefreshRate() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             runCatching {
@@ -291,8 +254,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainAppContent(
     viewModel: ConverterViewModel,
-    cloudSyncViewModel: CloudSyncViewModel? = null,
-    currentUser: FirebaseUser? = null,
     onShareEpub: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -306,7 +267,6 @@ fun MainAppContent(
         }
     }
 
-    // Intercept back presses globally to act like a backstack
     BackHandler(enabled = selectedTab != ScreenTab.CONVERT) {
         if (selectedTab == ScreenTab.READER || selectedTab == ScreenTab.STATS) {
             selectedTab = ScreenTab.LIBRARY
@@ -330,37 +290,33 @@ fun MainAppContent(
         }
     }
 
-    // Root overlay Box: GlassBackdrop fills edge-to-edge, screens never resize when
-    // the floating pill navigation bar hides/shows (eliminates reader re-pagination jitter).
     Box(modifier = modifier.fillMaxSize()) {
-        // Layer 0: Atmospheric Glassmorphism aurora backdrop
         GlassBackdrop(modifier = Modifier.fillMaxSize())
 
-        // Layer 1: Active Screen Content with iOS-style directional fluid transition
         AnimatedContent(
             targetState = selectedTab,
             transitionSpec = {
                 val movingForward = targetState.ordinal >= initialState.ordinal
                 val enterOffset: (Int) -> Int = { fullWidth ->
-                    val shift = (fullWidth * 0.045f).toInt()
+                    val shift = (fullWidth * 0.055f).toInt()
                     if (movingForward) shift else -shift
                 }
                 val exitOffset: (Int) -> Int = { fullWidth ->
-                    val shift = (fullWidth * 0.03f).toInt()
+                    val shift = (fullWidth * 0.035f).toInt()
                     if (movingForward) -shift else shift
                 }
-                (fadeIn(animationSpec = IosMotion.silkyTween(240)) +
+                (fadeIn(animationSpec = IosMotion.silkyTween(250)) +
                     slideInHorizontally(
-                        animationSpec = IosMotion.offsetSpring(dampingRatio = 0.88f, stiffness = 440f),
+                        animationSpec = IosMotion.offsetSpring(dampingRatio = 0.86f, stiffness = 410f),
                         initialOffsetX = enterOffset
                     ) +
                     scaleIn(
-                        initialScale = 0.988f,
-                        animationSpec = IosMotion.silkyTween(240)
+                        initialScale = 0.982f,
+                        animationSpec = IosMotion.silkyTween(250)
                     )) togetherWith
-                    (fadeOut(animationSpec = IosMotion.silkyTween(170)) +
+                    (fadeOut(animationSpec = IosMotion.silkyTween(175)) +
                         slideOutHorizontally(
-                            animationSpec = IosMotion.offsetSpring(dampingRatio = 0.90f, stiffness = 460f),
+                            animationSpec = IosMotion.offsetSpring(dampingRatio = 0.90f, stiffness = 440f),
                             targetOffsetX = exitOffset
                         ))
             },
@@ -408,8 +364,6 @@ fun MainAppContent(
                 )
                 ScreenTab.TOOLS -> ToolsScreen(
                     viewModel = viewModel,
-                    cloudSyncViewModel = cloudSyncViewModel,
-                    currentUser = currentUser,
                     modifier = Modifier
                         .fillMaxSize()
                         .statusBarsPadding()
@@ -417,7 +371,6 @@ fun MainAppContent(
             }
         }
 
-        // Layer 2: Floating Glassmorphism Pill Navigation Bar Overlay with iOS spring glide
         AnimatedVisibility(
             visible = showBottomBar,
             enter = slideInVertically(
@@ -445,49 +398,122 @@ fun MainAppContent(
 private fun AppLaunchLoadingScreen(
     modifier: Modifier = Modifier
 ) {
-    var revealed by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { revealed = true }
+    var logoRevealed by remember { mutableStateOf(false) }
+    var textRevealed by remember { mutableStateOf(false) }
+    var progressStarted by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        logoRevealed = true
+        delay(110L)
+        textRevealed = true
+        delay(70L)
+        progressStarted = true
+    }
+
+    val auraScaleState = animateFloatAsState(
+        targetValue = if (logoRevealed) 1.08f else 0.72f,
+        animationSpec = IosMotion.silkyTween(durationMillis = 900),
+        label = "launch_aura_scale"
+    )
+    val auraAlphaState = animateFloatAsState(
+        targetValue = if (logoRevealed) 1f else 0f,
+        animationSpec = IosMotion.silkyTween(durationMillis = 650),
+        label = "launch_aura_alpha"
+    )
     val logoScaleState = animateFloatAsState(
-        targetValue = if (revealed) 1f else 0.90f,
-        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.78f, stiffness = 300f),
+        targetValue = if (logoRevealed) 1f else 0.78f,
+        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.74f, stiffness = 270f),
         label = "launch_logo_scale"
     )
-    val contentAlphaState = animateFloatAsState(
-        targetValue = if (revealed) 1f else 0f,
-        animationSpec = IosMotion.silkyTween(durationMillis = 480),
-        label = "launch_content_alpha"
+    val logoAlphaState = animateFloatAsState(
+        targetValue = if (logoRevealed) 1f else 0f,
+        animationSpec = IosMotion.silkyTween(durationMillis = 360),
+        label = "launch_logo_alpha"
     )
+    val textOffsetState = animateFloatAsState(
+        targetValue = if (textRevealed) 0f else 28f,
+        animationSpec = IosMotion.fluidSpring(dampingRatio = 0.84f, stiffness = 340f),
+        label = "launch_text_offset"
+    )
+    val textAlphaState = animateFloatAsState(
+        targetValue = if (textRevealed) 1f else 0f,
+        animationSpec = IosMotion.silkyTween(durationMillis = 380),
+        label = "launch_text_alpha"
+    )
+    val progressState = animateFloatAsState(
+        targetValue = if (progressStarted) 1f else 0.04f,
+        animationSpec = IosMotion.silkyTween(durationMillis = 800),
+        label = "launch_progress"
+    )
+
+    val logoBorderBrush = remember {
+        Brush.linearGradient(
+            colors = listOf(
+                LuxuryGold,
+                CrystalBlue.copy(alpha = 0.85f),
+                LuxuryGoldDeep
+            )
+        )
+    }
+    val progressBrush = remember {
+        Brush.horizontalGradient(
+            colors = listOf(
+                LuxuryGoldDeep,
+                LuxuryGold,
+                CrystalBlue.copy(alpha = 0.90f)
+            )
+        )
+    }
 
     Box(
         modifier = modifier
-            .background(
-                Brush.verticalGradient(
+            .drawWithCache {
+                val bgBrush = Brush.verticalGradient(
                     colors = listOf(
                         Color(0xFF040B1A),
                         Color(0xFF091830),
                         Color(0xFF050A16)
                     )
                 )
-            )
+                val goldHalo = Brush.radialGradient(
+                    colors = listOf(
+                        LuxuryGold.copy(alpha = 0.22f),
+                        Color.Transparent
+                    ),
+                    center = Offset(size.width * 0.5f, size.height * 0.44f),
+                    radius = size.minDimension * 0.62f
+                )
+                val blueHalo = Brush.radialGradient(
+                    colors = listOf(
+                        CrystalBlue.copy(alpha = 0.18f),
+                        Color.Transparent
+                    ),
+                    center = Offset(size.width * 0.5f, size.height * 0.56f),
+                    radius = size.minDimension * 0.55f
+                )
+                onDrawBehind {
+                    drawRect(brush = bgBrush)
+                    drawRect(brush = goldHalo, alpha = auraAlphaState.value)
+                    drawRect(brush = blueHalo, alpha = auraAlphaState.value)
+                }
+            }
             .testTag("app_launch_loading_screen"),
         contentAlignment = Alignment.Center
     ) {
         Column(
-            modifier = Modifier
-                .padding(horizontal = 32.dp)
-                .graphicsLayer {
-                    val s = logoScaleState.value
-                    scaleX = s
-                    scaleY = s
-                    alpha = contentAlphaState.value
-                },
+            modifier = Modifier.padding(horizontal = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(104.dp)
+                    .size(106.dp)
+                    .graphicsLayer {
+                        val s = logoScaleState.value * (0.97f + 0.03f * auraScaleState.value)
+                        scaleX = s
+                        scaleY = s
+                        alpha = logoAlphaState.value
+                    }
                     .shadow(
                         elevation = 24.dp,
                         shape = RoundedCornerShape(28.dp),
@@ -497,13 +523,7 @@ private fun AppLaunchLoadingScreen(
                     .clip(RoundedCornerShape(28.dp))
                     .border(
                         width = 1.6.dp,
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                LuxuryGold,
-                                CrystalBlue.copy(alpha = 0.85f),
-                                LuxuryGoldDeep
-                            )
-                        ),
+                        brush = logoBorderBrush,
                         shape = RoundedCornerShape(28.dp)
                     )
             ) {
@@ -517,41 +537,59 @@ private fun AppLaunchLoadingScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            Text(
-                text = stringResource(id = R.string.app_name),
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 32.sp,
-                    letterSpacing = 1.6.sp
-                ),
-                color = LuxuryGold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.testTag("launch_screen_app_name")
-            )
+            Column(
+                modifier = Modifier.graphicsLayer {
+                    translationY = textOffsetState.value
+                    alpha = textAlphaState.value
+                },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = stringResource(id = R.string.app_name),
+                    style = MaterialTheme.typography.headlineLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 32.sp,
+                        letterSpacing = 1.6.sp
+                    ),
+                    color = LuxuryGold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.testTag("launch_screen_app_name")
+                )
 
-            Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
-            Text(
-                text = "PDF to EPUB  •  Offline Reader",
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 1.1.sp
-                ),
-                color = CrystalBlue.copy(alpha = 0.85f),
-                textAlign = TextAlign.Center
-            )
+                Text(
+                    text = "PDF to EPUB  •  Offline Reader",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 1.1.sp
+                    ),
+                    color = CrystalBlue.copy(alpha = 0.85f),
+                    textAlign = TextAlign.Center
+                )
 
-            Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(26.dp))
 
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .width(156.dp)
-                    .height(3.5.dp)
-                    .clip(RoundedCornerShape(100.dp)),
-                color = LuxuryGold,
-                trackColor = CrystalBlue.copy(alpha = 0.24f),
-                strokeCap = StrokeCap.Round
-            )
+                Box(
+                    modifier = Modifier
+                        .width(164.dp)
+                        .height(3.5.dp)
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(CrystalBlue.copy(alpha = 0.22f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                scaleX = progressState.value.coerceIn(0.02f, 1f)
+                                transformOrigin = TransformOrigin(0f, 0.5f)
+                            }
+                            .clip(RoundedCornerShape(100.dp))
+                            .background(progressBrush)
+                    )
+                }
+            }
         }
     }
 }

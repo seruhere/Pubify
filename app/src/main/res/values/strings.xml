@@ -1,15 +1,3 @@
 <resources>
     <string name="app_name">Pubify</string>
-    <string name="auth_subtitle">PDF to EPUB Studio  •  Cloud Library Sync</string>
-    <string name="auth_card_title">Sign in to Pubify</string>
-    <string name="auth_card_description">Connect your Google account to sync your library catalog, reading progress, highlights, and bookmarks with Firebase Firestore.</string>
-    <string name="auth_sign_in_google">Sign in with Google</string>
-    <string name="auth_checking_account">Checking account...</string>
-    <string name="auth_signing_in">Signing in...</string>
-    <string name="auth_skip_for_now">Skip for Now (Use Offline)</string>
-    <string name="cloud_sync_title">Cloud Sync &amp; Account</string>
-    <string name="cloud_sync_now">Sync Library Now</string>
-    <string name="cloud_sign_out">Sign Out</string>
-    <string name="settings_cloud_sign_in_title">Sign in with Google</string>
-    <string name="settings_cloud_sign_in_desc">Save your library catalog, reading statistics, highlights, and bookmarks safely to the cloud.</string>
 </resources>

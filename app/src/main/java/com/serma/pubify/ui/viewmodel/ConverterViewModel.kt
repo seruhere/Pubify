@@ -30,6 +30,7 @@ import com.serma.pubify.reader.TtsState
 import com.serma.pubify.ui.components.formatBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -53,13 +54,15 @@ enum class BookFilter {
     COMPLETED
 }
 
+@androidx.compose.runtime.Immutable
 data class BatchItem(
     val uri: Uri,
     val fileName: String,
     val fileSizeBytes: Long = 0L,
-    var status: String = "Pending",
-    var progress: Float = 0f,
-    var error: String? = null
+    val status: String = "Pending",
+    val progress: Float = 0f,
+    val stageMessage: String = "",
+    val error: String? = null
 )
 
 data class CacheClearDelta(
@@ -93,14 +96,6 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
         prefs.edit().putString("app_theme_mode", mode.name).apply()
     }
 
-    private val _isGuestMode = MutableStateFlow(prefs.getBoolean("is_guest_mode", false))
-    val isGuestMode: StateFlow<Boolean> = _isGuestMode.asStateFlow()
-
-    fun setGuestMode(skip: Boolean) {
-        _isGuestMode.value = skip
-        prefs.edit().putBoolean("is_guest_mode", skip).apply()
-    }
-
     fun toggleDarkMode() {
         val next = when (_themeMode.value) {
             ThemeMode.DARK -> ThemeMode.LIGHT
@@ -109,6 +104,52 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
             ThemeMode.SYSTEM -> ThemeMode.DARK
         }
         setThemeMode(next)
+    }
+
+    // Device storage permission & user-authorized output folder state
+    private val _storagePermissionStatus = MutableStateFlow(
+        com.serma.pubify.converter.EpubDeviceStorage.getStoragePermissionStatus(application)
+    )
+    val storagePermissionStatus: StateFlow<com.serma.pubify.converter.StoragePermissionStatus> =
+        _storagePermissionStatus.asStateFlow()
+
+    fun refreshStoragePermissionState() {
+        _storagePermissionStatus.value =
+            com.serma.pubify.converter.EpubDeviceStorage.getStoragePermissionStatus(getApplication())
+    }
+
+    fun onSafOutputFolderGranted(treeUri: Uri): Boolean {
+        val app = getApplication<Application>()
+        val granted = com.serma.pubify.converter.EpubDeviceStorage.savePersistedOutputTreeUri(app, treeUri)
+        refreshStoragePermissionState()
+        if (granted) {
+            _cacheOperationMessage.value = "Storage permission granted: ${_storagePermissionStatus.value.displayLocation}"
+        }
+        return granted
+    }
+
+    fun onConfirmScopedDownloads() {
+        val app = getApplication<Application>()
+        com.serma.pubify.converter.EpubDeviceStorage.confirmScopedDownloadsAccess(app)
+        refreshStoragePermissionState()
+        _cacheOperationMessage.value = "Saving converted books to ${_storagePermissionStatus.value.displayLocation}"
+    }
+
+    fun onDeclineSharedStorage() {
+        val app = getApplication<Application>()
+        com.serma.pubify.converter.EpubDeviceStorage.setAppOnlyStorageMode(app)
+        refreshStoragePermissionState()
+        _cacheOperationMessage.value = "Converted books will stay inside Pubify's private library only"
+    }
+
+    fun onLegacyStoragePermissionResult(granted: Boolean) {
+        val app = getApplication<Application>()
+        if (granted) {
+            com.serma.pubify.converter.EpubDeviceStorage.confirmScopedDownloadsAccess(app)
+        } else {
+            com.serma.pubify.converter.EpubDeviceStorage.setAppOnlyStorageMode(app)
+        }
+        refreshStoragePermissionState()
     }
 
     // Hardware volume key event bus for page turning
@@ -704,38 +745,57 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
         _isBatchRunning.value = false
     }
 
+    private fun updateBatchItem(index: Int, transform: (BatchItem) -> BatchItem) {
+        val current = _batchQueue.value
+        if (index !in current.indices) return
+        _batchQueue.value = current.mapIndexed { i, item ->
+            if (i == index) transform(item) else item
+        }
+    }
+
+    @Volatile
+    private var batchCancellationToken: Long = 0L
+
     fun cancelBatchConversion() {
+        batchCancellationToken++
         batchJob?.cancel()
         batchJob = null
         _isBatchRunning.value = false
-        val current = _batchQueue.value
-        current.forEach { item ->
-            if (item.status == "Converting") {
-                item.status = "Cancelled"
-            }
-        }
-        _batchQueue.value = ArrayList(current)
+        _batchCurrentIndex.value = 0
+        _batchQueue.value = emptyList()
     }
 
     fun startBatchConversion() {
-        val queue = _batchQueue.value.ifEmpty { return }
+        val initialQueue = _batchQueue.value.ifEmpty { return }
         if (_isBatchRunning.value) return
+        val runToken = ++batchCancellationToken
         _isBatchRunning.value = true
 
         batchJob = viewModelScope.launch {
             try {
-                queue.forEachIndexed { index, item ->
+                for (index in initialQueue.indices) {
+                    if (batchCancellationToken != runToken) return@launch
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+
+                    val currentItem = _batchQueue.value.getOrNull(index) ?: continue
                     // Skip items that are already successfully converted
-                    if (item.status == "Success") return@forEachIndexed
+                    if (currentItem.status == "Success") continue
 
                     _batchCurrentIndex.value = index
-                    item.status = "Converting"
-                    item.progress = 0f
-                    item.error = null
-                    _batchQueue.value = ArrayList(_batchQueue.value)
+                    updateBatchItem(index) {
+                        it.copy(
+                            status = "Converting",
+                            progress = 0.04f,
+                            stageMessage = "Converting...",
+                            error = null
+                        )
+                    }
 
                     try {
-                        val metadataResult = converter.extractMetadata(item.uri)
+                        val metadataResult = converter.extractMetadata(currentItem.uri)
+                        if (batchCancellationToken != runToken) return@launch
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+
                         val meta = metadataResult.getOrNull()
                         val options = ConversionOptions(
                             title = meta?.title?.takeUnless { com.serma.pubify.converter.PdfMetadataExtractor.isGenericTitle(it) } ?: "",
@@ -743,12 +803,29 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                             extractCover = true
                         )
 
-                        val convertResult = converter.convertWithSummary(item.uri, options) { progress ->
-                            item.progress = progress.percentage
-                            _batchQueue.value = ArrayList(_batchQueue.value)
+                        updateBatchItem(index) {
+                            it.copy(
+                                progress = 0.08f,
+                                stageMessage = "Converting..."
+                            )
                         }
 
+                        val convertResult = converter.convertWithSummary(currentItem.uri, options) { progress ->
+                            if (batchCancellationToken != runToken) return@convertWithSummary
+                            updateBatchItem(index) {
+                                it.copy(
+                                    status = "Converting",
+                                    progress = progress.percentage.coerceIn(0.05f, 0.99f),
+                                    stageMessage = "Converting..."
+                                )
+                            }
+                        }
+
+                        if (batchCancellationToken != runToken) return@launch
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+
                         convertResult.onSuccess { output ->
+                            if (batchCancellationToken != runToken) return@onSuccess
                             val file = output.epubFile
                             val resolvedTitle = output.resolvedTitle.ifBlank { options.title.ifBlank { "Untitled Book" } }
                             val resolvedAuthor = output.resolvedAuthor.ifBlank { options.author.ifBlank { "Unknown Author" } }
@@ -760,14 +837,13 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                                     bookTitle = resolvedTitle
                                 )
                             }
-                            item.status = "Success"
-                            item.progress = 1.0f
+                            if (batchCancellationToken != runToken) return@onSuccess
                             val coversDir = File(appContext.filesDir, "covers")
                             val coverFile = coversDir.listFiles()?.maxByOrNull { it.lastModified() }
                             val book = ConvertedBook(
                                 title = resolvedTitle,
                                 author = resolvedAuthor,
-                                originalFileName = item.fileName,
+                                originalFileName = currentItem.fileName,
                                 epubFilePath = file.absolutePath,
                                 coverImagePath = coverFile?.absolutePath,
                                 fileSizeBytes = file.length(),
@@ -776,19 +852,42 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                                 deviceSavedPath = savedDeviceResult.displayPath
                             )
                             repository.saveBook(book)
+                            if (batchCancellationToken != runToken) return@onSuccess
+                            updateBatchItem(index) {
+                                it.copy(
+                                    status = "Success",
+                                    progress = 1.0f,
+                                    stageMessage = "Converted to EPUB",
+                                    error = null
+                                )
+                            }
                         }.onFailure { err ->
-                            item.status = "Failed"
-                            item.error = err.localizedMessage ?: "Conversion failed"
+                            if (batchCancellationToken != runToken) return@onFailure
+                            updateBatchItem(index) {
+                                it.copy(
+                                    status = "Failed",
+                                    stageMessage = "",
+                                    error = err.localizedMessage ?: "Conversion failed"
+                                )
+                            }
                         }
                     } catch (t: Throwable) {
-                        if (t is kotlinx.coroutines.CancellationException) throw t
-                        item.status = "Failed"
-                        item.error = t.localizedMessage ?: "Unexpected error"
+                        if (t is kotlinx.coroutines.CancellationException || batchCancellationToken != runToken) {
+                            throw kotlinx.coroutines.CancellationException("Batch cancelled")
+                        }
+                        updateBatchItem(index) {
+                            it.copy(
+                                status = "Failed",
+                                stageMessage = "",
+                                error = t.localizedMessage ?: "Unexpected error"
+                            )
+                        }
                     }
-                    _batchQueue.value = ArrayList(_batchQueue.value)
                 }
             } finally {
-                _isBatchRunning.value = false
+                if (batchCancellationToken == runToken) {
+                    _isBatchRunning.value = false
+                }
             }
         }
     }

@@ -21,12 +21,5 @@ class PdfToEpubApp : Application() {
         // Initialize Room database & repository
         database = AppDatabase.getInstance(this)
         repository = BookRepository(database.bookDao())
-
-        // Ensure the app-named output folder exists on device storage
-        Thread {
-            try {
-                com.serma.pubify.converter.EpubDeviceStorage.ensureAppFolderExists(applicationContext)
-            } catch (_: Throwable) {}
-        }.start()
     }
 }

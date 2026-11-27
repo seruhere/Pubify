@@ -1,9 +1,16 @@
 package com.serma.pubify.ui.screens
 
+import android.Manifest
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.platform.LocalContext
+import com.serma.pubify.converter.EpubDeviceStorage
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -92,6 +99,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -145,8 +153,50 @@ fun ConverterScreen(
     val isBatchRunning by viewModel.isBatchRunning.collectAsStateWithLifecycle()
     val batchCurrentIndex by viewModel.batchCurrentIndex.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val storagePermissionStatus by viewModel.storagePermissionStatus.collectAsStateWithLifecycle()
 
+    val context = LocalContext.current
     var isMultiSelectMode by remember { mutableStateOf(false) }
+    var showStoragePermissionDialog by remember { mutableStateOf(false) }
+    var pendingConversionType by remember { mutableStateOf<String?>(null) }
+
+    fun proceedWithPendingConversion() {
+        val action = pendingConversionType
+        pendingConversionType = null
+        when (action) {
+            "SINGLE" -> viewModel.startConversion()
+            "BATCH" -> viewModel.startBatchConversion()
+        }
+    }
+
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        viewModel.onLegacyStoragePermissionResult(granted)
+        showStoragePermissionDialog = false
+        proceedWithPendingConversion()
+    }
+
+    val safOutputFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        if (treeUri != null) {
+            viewModel.onSafOutputFolderGranted(treeUri)
+            showStoragePermissionDialog = false
+            proceedWithPendingConversion()
+        }
+    }
+
+    fun triggerConversionWithStoragePermission(isBatch: Boolean) {
+        viewModel.refreshStoragePermissionState()
+        val latestStatus = EpubDeviceStorage.getStoragePermissionStatus(context)
+        if (latestStatus.isConfigured) {
+            if (isBatch) viewModel.startBatchConversion() else viewModel.startConversion()
+        } else {
+            pendingConversionType = if (isBatch) "BATCH" else "SINGLE"
+            showStoragePermissionDialog = true
+        }
+    }
 
     val singleFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -164,6 +214,85 @@ fun ConverterScreen(
     }
 
     val scrollState = rememberScrollState()
+
+    // Storage permission dialog shown before storing converted EPUB files on device storage
+    if (showStoragePermissionDialog) {
+        val isLegacy = storagePermissionStatus.isLegacyRuntimePermissionRequired
+        AlertDialog(
+            onDismissRequest = {
+                showStoragePermissionDialog = false
+                pendingConversionType = null
+            },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.FolderOpen,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = {
+                Text(
+                    text = "Storage Permission Required",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = if (isLegacy) {
+                            "Pubify needs storage permission to save converted EPUB books into your Downloads folder so you can access them anytime."
+                        } else {
+                            "Choose where Pubify is allowed to save your converted EPUB books. Grant access to a folder on your device, allow saving to Downloads/Pubify, or keep files inside the app only."
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (!isLegacy) {
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.onConfirmScopedDownloads()
+                                showStoragePermissionDialog = false
+                                proceedWithPendingConversion()
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("storage_permission_downloads_btn")
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Allow Downloads/Pubify")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (isLegacy) {
+                            legacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        } else {
+                            safOutputFolderLauncher.launch(null)
+                        }
+                    },
+                    modifier = Modifier.testTag("storage_permission_grant_btn")
+                ) {
+                    Text(if (isLegacy) "Allow Storage" else "Grant Folder Access")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.onDeclineSharedStorage()
+                        showStoragePermissionDialog = false
+                        proceedWithPendingConversion()
+                    },
+                    modifier = Modifier.testTag("storage_permission_deny_btn")
+                ) {
+                    Text("App Library Only")
+                }
+            }
+        )
+    }
 
     // Conversion progress popup
     if (isConverting) {
@@ -286,39 +415,52 @@ fun ConverterScreen(
                             }
                         }
 
-                        // Progress indicator if batch running
+                        // Overall batch progress indicator while running
                         if (isBatchRunning) {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                val total = batchQueue.size.toFloat().coerceAtLeast(1f)
+                                val total = batchQueue.size.toDouble().coerceAtLeast(1.0)
                                 val currentItem = batchQueue.getOrNull(batchCurrentIndex)
-                                val overallProgress = ((batchCurrentIndex + (currentItem?.progress ?: 0f)) / total).coerceIn(0f, 1f)
+                                val rawOverallProgress = (batchQueue.sumOf { qItem ->
+                                    when (qItem.status) {
+                                        "Success" -> 1.0
+                                        "Converting" -> qItem.progress.toDouble().coerceIn(0.0, 1.0)
+                                        else -> 0.0
+                                    }
+                                } / total).toFloat().coerceIn(0f, 1f)
+                                val animatedOverallProgress by animateFloatAsState(
+                                    targetValue = rawOverallProgress,
+                                    animationSpec = com.serma.pubify.ui.components.IosMotion.silkyTween(220),
+                                    label = "batch_overall_progress"
+                                )
 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(
-                                        text = "Converting: ${currentItem?.fileName ?: "Document"}",
+                                        text = "Overall: ${currentItem?.fileName ?: "Document"}",
                                         style = MaterialTheme.typography.labelSmall,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
                                     )
                                     Text(
-                                        text = "${(overallProgress * 100).toInt()}%",
+                                        text = "${(animatedOverallProgress * 100).toInt()}%",
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                 }
                                 LinearProgressIndicator(
-                                    progress = { overallProgress },
+                                    progress = { animatedOverallProgress },
+                                    strokeCap = StrokeCap.Round,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(8.dp)
                                         .clip(RoundedCornerShape(4.dp))
+                                        .testTag("batch_overall_progress_bar")
                                 )
                             }
                         }
@@ -382,11 +524,14 @@ fun ConverterScreen(
                                                         Text(
                                                             text = when (item.status) {
                                                                 "Success" -> "Converted to EPUB"
-                                                                "Converting" -> "Converting ${(item.progress * 100).toInt()}%..."
+                                                                "Converting" -> "Converting..."
                                                                 "Failed" -> "Error: ${item.error ?: "Failed"}"
+                                                                "Cancelled" -> "Cancelled"
                                                                 else -> "Queued"
                                                             },
                                                             style = MaterialTheme.typography.bodySmall,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
                                                             color = when (item.status) {
                                                                 "Success" -> GreenSuccess
                                                                 "Failed" -> RedError
@@ -400,11 +545,16 @@ fun ConverterScreen(
 
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
                                                 if (item.status == "Converting") {
+                                                    Text(
+                                                        text = "${(item.progress * 100).toInt().coerceIn(0, 100)}%",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
                                                     CircularProgressIndicator(
-                                                        modifier = Modifier.size(20.dp),
+                                                        modifier = Modifier.size(18.dp),
                                                         strokeWidth = 2.dp
                                                     )
                                                 } else if (item.status == "Success") {
@@ -439,14 +589,37 @@ fun ConverterScreen(
                                             }
                                         }
 
-                                        // Per-item progress bar if converting
-                                        if (item.status == "Converting") {
+                                        // Per-file individual progress bar shown during batch conversion and after completion
+                                        val showIndividualBar = isBatchRunning ||
+                                            item.status == "Converting" ||
+                                            item.status == "Success" ||
+                                            item.status == "Failed"
+                                        if (showIndividualBar) {
+                                            val targetFileProgress = when (item.status) {
+                                                "Success" -> 1f
+                                                "Converting" -> item.progress.coerceIn(0.03f, 1f)
+                                                "Failed" -> item.progress.coerceIn(0.1f, 1f)
+                                                else -> 0f
+                                            }
+                                            val animatedFileProgress by animateFloatAsState(
+                                                targetValue = targetFileProgress,
+                                                animationSpec = com.serma.pubify.ui.components.IosMotion.silkyTween(200),
+                                                label = "batch_item_progress_$index"
+                                            )
                                             LinearProgressIndicator(
-                                                progress = { item.progress },
+                                                progress = { animatedFileProgress },
+                                                color = when (item.status) {
+                                                    "Success" -> GreenSuccess
+                                                    "Failed" -> RedError
+                                                    else -> MaterialTheme.colorScheme.primary
+                                                },
+                                                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                                                strokeCap = StrokeCap.Round,
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .height(4.dp)
-                                                    .clip(RoundedCornerShape(2.dp))
+                                                    .height(6.dp)
+                                                    .clip(RoundedCornerShape(3.dp))
+                                                    .testTag("batch_item_progress_bar_$index")
                                             )
                                         }
                                     }
@@ -514,10 +687,14 @@ fun ConverterScreen(
 
                             if (isBatchRunning) {
                                 OutlinedButton(
-                                    onClick = { viewModel.cancelBatchConversion() },
+                                    onClick = {
+                                        viewModel.cancelBatchConversion()
+                                        isMultiSelectMode = false
+                                    },
                                     modifier = Modifier
                                         .weight(1.5f)
-                                        .height(48.dp),
+                                        .height(48.dp)
+                                        .testTag("cancel_batch_button"),
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                                 ) {
@@ -528,7 +705,7 @@ fun ConverterScreen(
                             } else {
                                 val pendingFiles = batchQueue.count { it.status != "Success" }
                                 Button(
-                                    onClick = { viewModel.startBatchConversion() },
+                                    onClick = { triggerConversionWithStoragePermission(isBatch = true) },
                                     enabled = pendingFiles > 0,
                                     modifier = Modifier
                                         .weight(1.5f)
@@ -1179,7 +1356,7 @@ fun ConverterScreen(
 
             // Giant CTA Button
             Button(
-                onClick = { viewModel.startConversion() },
+                onClick = { triggerConversionWithStoragePermission(isBatch = false) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)

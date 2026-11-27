@@ -1,16 +1,19 @@
 package com.serma.pubify.ui.components
 
+import android.content.ComponentName
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +25,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,8 +35,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -39,12 +45,11 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Highlight
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -53,46 +58,42 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RangeSlider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.serma.pubify.data.model.BookHighlight
-import com.serma.pubify.reader.GeminiReaderHelper
-import com.serma.pubify.reader.ReaderTheme
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material3.RangeSlider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.buildAnnotatedString
+import com.serma.pubify.data.model.BookHighlight
+import com.serma.pubify.reader.ReaderTheme
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
 enum class HighlightScope(val code: String, val label: String) {
@@ -185,18 +186,16 @@ data class HighlightColorOption(
 
 private enum class ActiveSubDialog {
     NONE,
-    NOTE,
-    GEMINI
+    NOTE
 }
 
 /**
  * Clean, uncluttered reading action dropdown menu for long-pressed words and passages.
- * Contains 5 focused options:
+ * Contains 4 focused options:
  * 1. Copy
- * 2. Highlight (with Word / Line / Passage scope + 5 color swatches)
+ * 2. Highlight (with Word / Line / Passage / Custom scope + 5 color swatches)
  * 3. Note
- * 4. Dictionary (opens Google Search directly for definition)
- * 5. Ask Gemini
+ * 4. Dictionary (opens word meaning in the device's default browser)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -211,7 +210,6 @@ fun ReadingWordInspectSheet(
     onReadAloud: ((paragraphIndex: Int) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     var showColorPicker by remember { mutableStateOf(false) }
     var selectedScope by remember(target) {
         mutableStateOf(
@@ -262,19 +260,33 @@ fun ReadingWordInspectSheet(
         HighlightScope.CUSTOM -> customSelectedText.ifBlank { target.word.trim().ifBlank { cleanParagraph } }
     }
 
+    var noteInput by remember(target) { mutableStateOf(target.existingHighlight?.note ?: "") }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = if (theme.isGlass) Color(0xF80B1528) else if (theme.isDark) Color(0xFF1E212B) else Color(0xFFFAFAFA),
         tonalElevation = 6.dp
     ) {
-        Column(
+        AnimatedContent(
+            targetState = activeDialog,
+            transitionSpec = {
+                fadeIn(IosMotion.silkyTween(180)) togetherWith fadeOut(IosMotion.silkyTween(140))
+            },
+            label = "word_inspect_sheet_mode",
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 6.dp)
-                .testTag("reading_clean_dropdown_menu")
-        ) {
+                .imePadding()
+                .navigationBarsPadding()
+        ) { currentPanel ->
+            when (currentPanel) {
+                ActiveSubDialog.NONE -> Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 6.dp)
+                        .testTag("reading_clean_dropdown_menu")
+                ) {
             // Header: Selected Word / Snippet + Close
             Row(
                 modifier = Modifier
@@ -337,7 +349,7 @@ fun ReadingWordInspectSheet(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // THE 5 CLEAN DROPDOWN OPTIONS: Copy, Highlight, Note, Dictionary (Google Search), Ask Gemini
+            // THE 4 CLEAN DROPDOWN OPTIONS: Copy, Highlight, Note, Dictionary (Default Browser)
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -753,273 +765,397 @@ fun ReadingWordInspectSheet(
                     }
                 )
 
-                // 4. Dictionary Option -> Opens Google Search directly for word definition
+                // 4. Dictionary Option -> Opens word meaning in the device's default browser
                 DropdownOptionRow(
                     icon = Icons.AutoMirrored.Filled.MenuBook,
-                    title = "Dictionary",
-                    subtitle = "Look up meaning on Google Search",
+                    title = "Dictionary (Meaning)",
+                    subtitle = "Open meaning in default browser",
                     theme = theme,
                     testTag = "long_press_action_dictionary",
                     onClick = {
-                        openGoogleDictionarySearch(context, target.word)
+                        openWordMeaningInDefaultBrowser(context, target.word)
                         onDismiss()
                     }
                 )
 
-                // 5. Ask Gemini Option
+                // 5. Ask AI Option -> Launches user's Gemini or ChatGPT prompt pill with word pre-filled
                 DropdownOptionRow(
                     icon = Icons.Default.AutoAwesome,
-                    title = "Ask Gemini",
-                    subtitle = "Context explanation & literary analysis",
+                    title = "Ask AI",
+                    subtitle = "Open Gemini or ChatGPT with word pre-filled",
                     theme = theme,
-                    testTag = "long_press_action_gemini",
+                    testTag = "long_press_action_ai",
                     accentTint = true,
                     onClick = {
-                        activeDialog = ActiveSubDialog.GEMINI
+                        openWordInExternalAi(context, target.word, ExternalAiProvider.AUTO)
+                        onDismiss()
                     }
                 )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 64.dp, end = 10.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        onClick = {
+                            openWordInExternalAi(context, target.word, ExternalAiProvider.GEMINI)
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        color = theme.accentColor.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, theme.accentColor.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .iosTapBounce(pressedScale = 0.94f)
+                            .testTag("long_press_action_ai_gemini")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp)
+                        ) {
+                            Text(
+                                text = "Gemini",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = theme.accentColor
+                            )
+                        }
+                    }
+
+                    Surface(
+                        onClick = {
+                            openWordInExternalAi(context, target.word, ExternalAiProvider.CHATGPT)
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        color = theme.accentColor.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, theme.accentColor.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .iosTapBounce(pressedScale = 0.94f)
+                            .testTag("long_press_action_ai_chatgpt")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp)
+                        ) {
+                            Text(
+                                text = "ChatGPT",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = theme.accentColor
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
         }
-    }
 
-    // SUB-DIALOG 1: Note Dialog
-    if (activeDialog == ActiveSubDialog.NOTE) {
-        var noteInput by remember { mutableStateOf(target.existingHighlight?.note ?: "") }
-        AlertDialog(
-            onDismissRequest = { activeDialog = ActiveSubDialog.NONE },
-            title = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // PANEL 2: Note Editor rendered directly inside the sheet (zero stacked-dialog focus bugs)
+                ActiveSubDialog.NOTE -> Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(Icons.Default.EditNote, contentDescription = null, tint = theme.accentColor)
-                    Text("Note on “${target.word}”", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            IconButton(
+                                onClick = { activeDialog = ActiveSubDialog.NONE },
+                                modifier = Modifier.iosTapBounce(pressedScale = 0.88f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = theme.textColor
+                                )
+                            }
+                            Icon(Icons.Default.EditNote, contentDescription = null, tint = theme.accentColor)
+                            Text(
+                                text = "Note on “${target.word}”",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = theme.textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = theme.textColor.copy(alpha = 0.7f))
+                        }
+                    }
+
                     Text(
-                        text = "From ${target.chapterTitle}: “${cleanParagraph.take(120)}...”",
+                        text = "From ${target.chapterTitle}: “${cleanParagraph.take(120)}${if (cleanParagraph.length > 120) "..." else ""}”",
                         style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = theme.textColor.copy(alpha = 0.72f)
                     )
+
                     OutlinedTextField(
                         value = noteInput,
                         onValueChange = { noteInput = it },
-                        placeholder = { Text("Write your thoughts or annotation here...") },
+                        placeholder = {
+                            Text(
+                                "Write your thoughts or annotation here...",
+                                color = theme.textColor.copy(alpha = 0.5f)
+                            )
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = theme.textColor,
+                            unfocusedTextColor = theme.textColor,
+                            cursorColor = theme.accentColor,
+                            focusedBorderColor = theme.accentColor,
+                            unfocusedBorderColor = theme.textColor.copy(alpha = 0.28f)
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(130.dp)
                             .testTag("note_input_field"),
                         shape = RoundedCornerShape(12.dp)
                     )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onSaveNote?.invoke(noteInput.trim())
-                        Toast.makeText(context, "Note saved", Toast.LENGTH_SHORT).show()
-                        activeDialog = ActiveSubDialog.NONE
-                        onDismiss()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = theme.accentColor),
-                    modifier = Modifier.testTag("save_note_confirm_btn")
-                ) {
-                    Text("Save Note", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { activeDialog = ActiveSubDialog.NONE }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 
-    // SUB-DIALOG 2: Ask Gemini AI Dialog
-    if (activeDialog == ActiveSubDialog.GEMINI) {
-        var userQuestion by remember { mutableStateOf("") }
-        var isGeminiLoading by remember { mutableStateOf(false) }
-        var geminiAnswer by remember { mutableStateOf<String?>(null) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { activeDialog = ActiveSubDialog.NONE },
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, theme.textColor.copy(alpha = 0.25f)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .iosTapBounce(pressedScale = 0.96f)
+                        ) {
+                            Text("Cancel", color = theme.textColor)
+                        }
+                        Button(
+                            onClick = {
+                                onSaveNote?.invoke(noteInput.trim())
+                                Toast.makeText(context, "Note saved", Toast.LENGTH_SHORT).show()
+                                activeDialog = ActiveSubDialog.NONE
+                                onDismiss()
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = theme.accentColor),
+                            modifier = Modifier
+                                .weight(1.2f)
+                                .height(46.dp)
+                                .iosTapBounce(pressedScale = 0.96f)
+                                .testTag("save_note_confirm_btn")
+                        ) {
+                            Text("Save Note", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
 
-        fun queryGemini(prompt: String) {
-            isGeminiLoading = true
-            geminiAnswer = null
-            coroutineScope.launch {
-                val result = GeminiReaderHelper.askGemini(
-                    word = target.word,
-                    passage = cleanParagraph,
-                    chapterTitle = target.chapterTitle,
-                    userPrompt = prompt
-                )
-                isGeminiLoading = false
-                geminiAnswer = result.getOrElse { "Could not generate explanation. Please try again." }
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
             }
         }
-
-        AlertDialog(
-            onDismissRequest = { activeDialog = ActiveSubDialog.NONE },
-            title = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = theme.accentColor,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text("Ask Gemini", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "Word: “${target.word}”",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = theme.accentColor
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = theme.accentColor.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, theme.accentColor.copy(alpha = 0.3f)),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable {
-                                    queryGemini("Explain '${target.word}' in the context of this passage.")
-                                }
-                        ) {
-                            Text(
-                                text = "Explain Context",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = theme.accentColor,
-                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp)
-                            )
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = theme.accentColor.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, theme.accentColor.copy(alpha = 0.3f)),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable {
-                                    queryGemini("Analyze the literary theme, mood, and symbolism connected with '${target.word}'.")
-                                }
-                        ) {
-                            Text(
-                                text = "Literary Theme",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = theme.accentColor,
-                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp)
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = userQuestion,
-                            onValueChange = { userQuestion = it },
-                            placeholder = { Text("Ask anything about this word...", fontSize = 12.sp) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            singleLine = true
-                        )
-                        IconButton(
-                            onClick = {
-                                if (userQuestion.isNotBlank()) {
-                                    queryGemini(userQuestion.trim())
-                                }
-                            },
-                            enabled = userQuestion.isNotBlank() && !isGeminiLoading
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = theme.accentColor)
-                        }
-                    }
-
-                    if (isGeminiLoading) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = theme.accentColor)
-                            Text("Gemini is thinking...", style = MaterialTheme.typography.bodySmall)
-                        }
-                    } else if (geminiAnswer != null) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = theme.accentColor.copy(alpha = 0.08f),
-                            border = BorderStroke(1.dp, theme.accentColor.copy(alpha = 0.25f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    text = geminiAnswer!!,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    TextButton(
-                                        onClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            clipboard.setPrimaryClip(ClipData.newPlainText("Gemini Insight", geminiAnswer))
-                                            Toast.makeText(context, "Gemini insight copied", Toast.LENGTH_SHORT).show()
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Copy", style = MaterialTheme.typography.labelSmall)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { activeDialog = ActiveSubDialog.NONE }) {
-                    Text("Done")
-                }
-            }
-        )
     }
 }
 
-private fun openGoogleDictionarySearch(context: Context, word: String) {
-    val cleanWord = word.trim().ifBlank { return }
+private fun openWordMeaningInDefaultBrowser(context: Context, word: String) {
+    val cleanWord = word.trim { !it.isLetterOrDigit() }.ifBlank { word.trim() }
+    if (cleanWord.isBlank()) return
+    openQueryInDefaultBrowser(context, "define $cleanWord")
+}
+
+private fun openQueryInDefaultBrowser(context: Context, query: String) {
+    val cleanQuery = query.trim().ifBlank { return }
+    val encoded = URLEncoder.encode(cleanQuery, "UTF-8")
+    val searchUri = Uri.parse("https://www.google.com/search?q=$encoded")
+    openUrlInDefaultBrowser(context, searchUri)
+}
+
+private fun openUrlInDefaultBrowser(context: Context, targetUri: Uri) {
     try {
-        val encoded = URLEncoder.encode("define $cleanWord", "UTF-8")
-        val uri = Uri.parse("https://www.google.com/search?q=$encoded")
-        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+        // Resolve the user's default browser package via a generic https browsable probe
+        val browserProbe = Intent(Intent.ACTION_VIEW, Uri.parse("https://")).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        val defaultBrowserPackage = context.packageManager
+            .resolveActivity(browserProbe, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo
+            ?.packageName
+            ?.takeUnless { it == "android" || it == context.packageName }
+
+        val browserIntent = Intent(Intent.ACTION_VIEW, targetUri).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (!defaultBrowserPackage.isNullOrBlank()) {
+                setPackage(defaultBrowserPackage)
+            }
+        }
+        context.startActivity(browserIntent)
+    } catch (_: Throwable) {
+        try {
+            val fallbackIntent = Intent(Intent.ACTION_VIEW, targetUri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(fallbackIntent)
+        } catch (_: Throwable) {
+            Toast.makeText(context, "No web browser found on this device", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+private enum class ExternalAiProvider {
+    AUTO,
+    GEMINI,
+    CHATGPT
+}
+
+private const val PKG_GEMINI = "com.google.android.apps.bard"
+private const val PKG_CHATGPT = "com.openai.chatgpt"
+private const val PKG_GOOGLE_APP = "com.google.android.googlequicksearchbox"
+
+private fun openWordInExternalAi(
+    context: Context,
+    word: String,
+    provider: ExternalAiProvider
+) {
+    val cleanWord = word.trim { !it.isLetterOrDigit() }.ifBlank { word.trim() }
+    if (cleanWord.isBlank()) return
+
+    when (provider) {
+        ExternalAiProvider.GEMINI -> {
+            if (launchGeminiWithPrefilledWord(context, cleanWord)) return
+            copyWordToClipboard(context, cleanWord)
+            openUrlInDefaultBrowser(context, Uri.parse("https://gemini.google.com/app"))
+            Toast.makeText(context, "'$cleanWord' copied — ready to paste in Gemini", Toast.LENGTH_SHORT).show()
+        }
+        ExternalAiProvider.CHATGPT -> {
+            if (launchPackageWithPrefilledText(context, PKG_CHATGPT, cleanWord)) return
+            val encoded = URLEncoder.encode(cleanWord, "UTF-8")
+            openUrlInDefaultBrowser(context, Uri.parse("https://chatgpt.com/?q=$encoded"))
+        }
+        ExternalAiProvider.AUTO -> {
+            if (launchGeminiWithPrefilledWord(context, cleanWord)) return
+            if (launchPackageWithPrefilledText(context, PKG_CHATGPT, cleanWord)) return
+            // Fallback to ChatGPT web with ?q= query parameter so the word is pre-filled in the search pill
+            val encoded = URLEncoder.encode(cleanWord, "UTF-8")
+            openUrlInDefaultBrowser(context, Uri.parse("https://chatgpt.com/?q=$encoded"))
+        }
+    }
+}
+
+private fun launchGeminiWithPrefilledWord(context: Context, word: String): Boolean {
+    // 1. Standalone Google Gemini app via ACTION_PROCESS_TEXT or ACTION_SEND (pre-fills prompt pill)
+    if (launchPackageWithPrefilledText(context, PKG_GEMINI, word)) return true
+
+    // 2. Gemini hosted inside Google App (activity name containing gemini / bard / robin)
+    if (launchGoogleAppGeminiActivity(context, word)) return true
+
+    // 3. If Gemini stub app is installed without a direct text-share target, copy & launch it
+    val launchIntent = context.packageManager.getLaunchIntentForPackage(PKG_GEMINI)
+    if (launchIntent != null) {
+        return try {
+            copyWordToClipboard(context, word)
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(launchIntent)
+            Toast.makeText(context, "'$word' copied for Gemini", Toast.LENGTH_SHORT).show()
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+    return false
+}
+
+private fun launchPackageWithPrefilledText(
+    context: Context,
+    packageName: String,
+    text: String
+): Boolean {
+    val pm = context.packageManager
+
+    // Try ACTION_PROCESS_TEXT first (drops selected text straight into the app's search/prompt pill)
+    val processTextIntent = Intent(Intent.ACTION_PROCESS_TEXT).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_PROCESS_TEXT, text)
+        putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
+        setPackage(packageName)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    val processMatches = pm.queryIntentActivities(processTextIntent, 0)
+    if (processMatches.isNotEmpty()) {
+        val target = processMatches.first().activityInfo
+        processTextIntent.component = ComponentName(target.packageName, target.name)
+        if (runCatching { context.startActivity(processTextIntent) }.isSuccess) {
+            return true
+        }
+    }
+
+    // Try ACTION_SEND text/plain (opens Gemini / ChatGPT composer with EXTRA_TEXT pre-pasted)
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+        setPackage(packageName)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    val sendMatches = pm.queryIntentActivities(sendIntent, 0)
+    if (sendMatches.isNotEmpty()) {
+        val target = sendMatches.first().activityInfo
+        sendIntent.component = ComponentName(target.packageName, target.name)
+        if (runCatching { context.startActivity(sendIntent) }.isSuccess) {
+            return true
+        }
+    }
+
+    return false
+}
+
+private fun launchGoogleAppGeminiActivity(context: Context, text: String): Boolean {
+    val pm = context.packageManager
+    val candidates = listOf(
+        Intent(Intent.ACTION_PROCESS_TEXT).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_PROCESS_TEXT, text)
+            putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
+            setPackage(PKG_GOOGLE_APP)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+        Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            setPackage(PKG_GOOGLE_APP)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
-    } catch (_: Throwable) {
-        Toast.makeText(context, "Unable to open Google Search on this device", Toast.LENGTH_SHORT).show()
+    )
+
+    for (intent in candidates) {
+        val match = pm.queryIntentActivities(intent, 0).firstOrNull { resolveInfo ->
+            val actName = resolveInfo.activityInfo.name.lowercase()
+            val label = resolveInfo.loadLabel(pm).toString().lowercase()
+            actName.contains("gemini") || actName.contains("bard") || actName.contains("robin") ||
+                label.contains("gemini")
+        }
+        if (match != null) {
+            intent.component = ComponentName(match.activityInfo.packageName, match.activityInfo.name)
+            if (runCatching { context.startActivity(intent) }.isSuccess) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+private fun copyWordToClipboard(context: Context, text: String) {
+    runCatching {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Selected Word", text))
     }
 }
 
@@ -1037,6 +1173,7 @@ private fun DropdownOptionRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .iosTapBounce(pressedScale = 0.97f)
             .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
             .testTag(testTag),
